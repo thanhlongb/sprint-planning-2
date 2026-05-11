@@ -252,6 +252,16 @@ async def _orchestrate(session_id: str) -> None:
 
     log.info("orchestrator.completed session_id=%s", session_id)
 
+    # ── US-08: Build and broadcast the final sprint backlog ───────────────────
+    sprint_backlog = _build_sprint_backlog(
+        session=session,
+        slots=slots,
+        backlog_items=backlog_items or [],
+        selected_items=selected_items or [],
+        assignments=assignments,
+    )
+    await _broadcast_sprint_backlog(sprint_backlog, slots)
+
 
 def _guard_transition(session: Session, target: str) -> None:
     _ALLOWED: dict[str, set[str]] = {
@@ -262,6 +272,119 @@ def _guard_transition(session: Session, target: str) -> None:
     }
     if target not in _ALLOWED.get(session.status, set()):
         raise ValueError(f"Illegal transition {session.status!r} → {target!r}")
+
+
+# ── US-08: Sprint Backlog Output ──────────────────────────────────────────────
+
+
+def _build_sprint_backlog(
+    *,
+    session: _SessionSnap,
+    slots: list[_SlotSnap],
+    backlog_items: list[dict],
+    selected_items: list[str],
+    assignments: dict[str, str],
+) -> dict[str, Any]:
+    """Construct the canonical sprint_backlog payload (AC1, AC3, AC4, AC5).
+
+    AC3: Only standardised BacklogItem fields are included — internal source-system
+         metadata is intentionally excluded (BacklogItem schema enforced by Pydantic
+         during Phase 1 ingestion).
+    AC4: Each assignment entry carries both assignee_id and assignee_name.
+    AC5: A single dict is built once and sent verbatim to every participant
+         (byte-identical delivery guaranteed by shared reference before serialisation).
+    """
+    # Build lookup maps
+    item_lookup: dict[str, dict] = {item["item_id"]: item for item in backlog_items}
+    name_lookup: dict[str, str] = {
+        s.participant_id: s.name for s in slots if s.participant_id
+    }
+
+    # Build the selected items list with standardised schema + assignee info (AC3, AC4)
+    selected_item_entries: list[dict] = []
+    for item_id in selected_items:
+        item = item_lookup.get(item_id, {"item_id": item_id})
+        assignee_id = assignments.get(item_id)
+        assignee_name = name_lookup.get(assignee_id, assignee_id) if assignee_id else None
+        selected_item_entries.append({
+            # Standardised BacklogItem fields only (AC3)
+            "item_id": item.get("item_id", item_id),
+            "title": item.get("title", ""),
+            "description": item.get("description", ""),
+            "priority": item.get("priority", "LOW"),
+            "story_points": item.get("story_points"),
+            "labels": item.get("labels", []),
+            "dependencies": item.get("dependencies", []),
+            # Assignment enrichment (AC4)
+            "assignee_id": assignee_id,
+            "assignee_name": assignee_name,
+        })
+
+    # Build the capacity_plan summary (AC1): per-assignee story point totals
+    capacity_by_assignee: dict[str, int] = {}
+    for entry in selected_item_entries:
+        aid = entry["assignee_id"]
+        if aid:
+            sp = entry["story_points"] or 0
+            capacity_by_assignee[aid] = capacity_by_assignee.get(aid, 0) + sp
+
+    capacity_plan: list[dict] = [
+        {
+            "assignee_id": aid,
+            "assignee_name": name_lookup.get(aid, aid),
+            "item_count": sum(
+                1 for e in selected_item_entries if e["assignee_id"] == aid
+            ),
+            "total_story_points": sp,
+        }
+        for aid, sp in capacity_by_assignee.items()
+    ]
+
+    return {
+        "session_id": session.id,
+        "sprint_goal": session.sprint_goal,
+        "selected_items": selected_item_entries,
+        "capacity_plan": capacity_plan,
+    }
+
+
+async def _broadcast_sprint_backlog(
+    sprint_backlog: dict[str, Any],
+    slots: list[_SlotSnap],
+) -> None:
+    """Send the canonical sprint_backlog task to every joined participant (AC2, AC5, AC6).
+
+    AC5: The same `sprint_backlog` dict is serialised once per delivery — all
+         participants receive the same canonical payload.
+    AC6: Individual delivery failures are logged but do not raise; the session
+         has already been marked COMPLETED before this function is called.
+    """
+    all_joined = _reachable_slots(slots)
+
+    async def deliver(slot: _SlotSnap) -> None:
+        try:
+            # Build a minimal session_ctx for the sprint_backlog task
+            session_ctx = {
+                "session_id": sprint_backlog["session_id"],
+                "sprint_goal": sprint_backlog["sprint_goal"],
+            }
+            await _a2a.send_task(
+                endpoint=slot.endpoint,
+                task_type="sprint_backlog",
+                session_ctx=session_ctx,
+                payload=sprint_backlog,
+            )
+            log.info(
+                "sprint_backlog.delivered session_id=%s slot=%s",
+                sprint_backlog["session_id"], slot.id,
+            )
+        except Exception as exc:  # AC6: log, never raise
+            log.warning(
+                "sprint_backlog.delivery_failed session_id=%s slot=%s exc=%s",
+                sprint_backlog["session_id"], slot.id, exc,
+            )
+
+    await asyncio.gather(*[deliver(s) for s in all_joined], return_exceptions=True)
 
 
 # ── Phase 1: Backlog Presentation ─────────────────────────────────────────────

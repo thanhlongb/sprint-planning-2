@@ -7,12 +7,12 @@
 As a **participant**, I want to receive the final sprint backlog when the session completes so that I can sync the results into my own system of record.
 
 ## Acceptance Criteria
-- AC1: On `COMPLETED`, the platform constructs a `sprint_backlog` object containing: `session_id`, `sprint_goal`, the list of selected items with their `assignee_id`, and a `capacity_plan` summary.
-- AC2: The `sprint_backlog` task is sent to every participant via their A2A endpoint (or the React UI proxy for humans).
-- AC3: Items in the output use the standardised Backlog Item schema — no internal source-system metadata is included.
-- AC4: Assignments include both `assignee_id` and the human-readable `assignee_name` so participants can render without an extra lookup.
-- AC5: A single canonical version of the sprint backlog is delivered — all participants receive byte-identical content.
-- AC6: Delivery failures (agent unreachable at completion) are logged but do not prevent the session from completing.
+- [x] AC1: On `COMPLETED`, the platform constructs a `sprint_backlog` object containing: `session_id`, `sprint_goal`, the list of selected items with their `assignee_id`, and a `capacity_plan` summary.
+- [x] AC2: The `sprint_backlog` task is sent to every participant via their A2A endpoint (or the React UI proxy for humans).
+- [x] AC3: Items in the output use the standardised Backlog Item schema — no internal source-system metadata is included.
+- [x] AC4: Assignments include both `assignee_id` and the human-readable `assignee_name` so participants can render without an extra lookup.
+- [x] AC5: A single canonical version of the sprint backlog is delivered — all participants receive byte-identical content.
+- [x] AC6: Delivery failures (agent unreachable at completion) are logged but do not prevent the session from completing.
 
 ## Out of Scope
 - Round-trip sync into Jira/GitHub/TestRail (each agent handles its own sync).

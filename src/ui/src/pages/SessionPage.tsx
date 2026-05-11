@@ -16,6 +16,7 @@ import BacklogView from "@/components/BacklogView";
 import VoteView from "@/components/VoteView";
 import AssignView from "@/components/AssignView";
 import ConfirmView from "@/components/ConfirmView";
+import SprintBacklogView from "@/components/SprintBacklogView";
 
 interface TaskEnvelope {
   task_id: string;
@@ -188,6 +189,8 @@ export default function SessionPage() {
             submittedArtifact={submittedArtifact}
           />
         );
+      case "sprint_backlog":
+        return <SprintBacklogView payload={pl} />;
       default:
         return (
           <div className="text-sm text-muted-foreground">
@@ -204,6 +207,7 @@ export default function SessionPage() {
     vote: "Prioritisation",
     assign_opportunity: "Assignment",
     confirm: "Confirmation",
+    sprint_backlog: "Sprint Backlog",
   };
 
   return (
