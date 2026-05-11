@@ -1,16 +1,6 @@
 """Phase Orchestrator for sprint_planning_v1 (US-04).
 
-Hard-coded four-phase execution for the baseline template:
-  1. Backlog Presentation  – present_backlog → PRODUCT_OWNER
-  2. Prioritisation        – vote (parallel, all joined) → tally dot votes → greedy select
-  3. Assignment            – assign_opportunity per item (5 s timeout) → VOLUNTEER_FIRST / AUTO_BALANCE
-  4. Confirmation          – confirm (parallel, all joined) → quorum ≥ 0.75 → COMPLETED
-
-Design invariants:
-  AC5: Every outbound A2A task carries the full session_ctx (late-populated fields are None).
-  AC6: phase_history appended with phase_id, completed_at, outcome at each transition.
-  AC7: Load for tie-breaking counted from session_ctx.assignments only.
-  AC8: Context is committed to DB only at phase boundaries; partial phase state is never persisted.
+Now refactored to be a generic action executor based on YAML process templates (US-09).
 """
 
 from __future__ import annotations
@@ -27,7 +17,7 @@ from sqlalchemy import select
 
 from app.a2a.client import A2AClient
 from app.db import SessionLocal
-from app.models import Session, SessionParticipant
+from app.models import Session, SessionParticipant, Template
 
 log = logging.getLogger(__name__)
 
@@ -165,6 +155,12 @@ async def _orchestrate(session_id: str) -> None:
         )
         slot_rows = list(slots_result.scalars())
 
+        template_result = await db.execute(select(Template).where(Template.id == row.template))
+        template_row = template_result.scalar_one_or_none()
+        if not template_row:
+            log.error("orchestrator.missing_template session_id=%s template=%s", session_id, row.template)
+            return
+
         session = _SessionSnap(
             id=row.id,
             sprint_goal=row.sprint_goal,
@@ -184,70 +180,62 @@ async def _orchestrate(session_id: str) -> None:
             for s in slot_rows
         ]
 
-    # Mutable orchestration state (never written to DB mid-phase — AC8)
-    backlog_items: list[dict] | None = None
-    selected_items: list[str] | None = None
-    assignments: dict[str, str] = {}
-    phase_history: list[dict] = []
+    # Mutable orchestration state
+    backlog_items: list[dict] | None = (row.context or {}).get("backlog_items", None)
+    selected_items: list[str] | None = (row.context or {}).get("selected_items", None)
+    assignments: dict[str, str] = (row.context or {}).get("assignments", {})
+    phase_history: list[dict] = (row.context or {}).get("phase_history", [])
 
-    # ── Phase 1: Backlog Presentation ─────────────────────────────────────────
-    log.info("orchestrator.phase1.start session_id=%s", session_id)
-    backlog_items = await _phase1_backlog_presentation(session, slots, phase_history, assignments)
-    phase_history.append({
-        "phase_id": "backlog_presentation",
-        "completed_at": datetime.now(tz=timezone.utc).isoformat(),
-        "outcome": f"{len(backlog_items)} items received from PRODUCT_OWNER",
-    })
-    await _commit_ctx(session_id, {"backlog_items": backlog_items, "phase_history": phase_history})
-    log.info("orchestrator.phase1.done session_id=%s items=%d", session_id, len(backlog_items))
+    for phase in template_row.phases:
+        phase_id = phase["phase_id"]
+        phase_name = phase["name"]
+        log.info("orchestrator.phase.start session_id=%s phase_id=%s", session_id, phase_id)
 
-    # ── Phase 2: Prioritisation ───────────────────────────────────────────────
-    log.info("orchestrator.phase2.start session_id=%s", session_id)
-    selected_items = await _phase2_prioritisation(
-        session, slots, backlog_items, phase_history, assignments
-    )
-    phase_history.append({
-        "phase_id": "prioritization",
-        "completed_at": datetime.now(tz=timezone.utc).isoformat(),
-        "outcome": f"{len(selected_items)} of {len(backlog_items)} items selected",
-    })
-    await _commit_ctx(session_id, {"selected_items": selected_items, "phase_history": phase_history})
-    log.info("orchestrator.phase2.done session_id=%s selected=%d", session_id, len(selected_items))
+        action_context = {}
+        outcome = ""
 
-    # ── Phase 3: Assignment ───────────────────────────────────────────────────
-    log.info("orchestrator.phase3.start session_id=%s", session_id)
-    assignments = await _phase3_assignment(
-        session, slots, backlog_items, selected_items, phase_history, assignments
-    )
-    phase_history.append({
-        "phase_id": "assignment",
-        "completed_at": datetime.now(tz=timezone.utc).isoformat(),
-        "outcome": f"{len(assignments)} of {len(selected_items)} items assigned",
-    })
-    await _commit_ctx(session_id, {"assignments": assignments, "phase_history": phase_history})
-    log.info("orchestrator.phase3.done session_id=%s assigned=%d", session_id, len(assignments))
+        for action in phase.get("actions", []):
+            action_type = action.get("type")
+            log.info("orchestrator.action.start session_id=%s phase_id=%s action=%s", session_id, phase_id, action_type)
 
-    # ── Phase 4: Confirmation ─────────────────────────────────────────────────
-    log.info("orchestrator.phase4.start session_id=%s", session_id)
-    quorum = await _phase4_confirmation(
-        session, slots, backlog_items, selected_items, assignments, phase_history
-    )
-    phase_history.append({
-        "phase_id": "confirmation",
-        "completed_at": datetime.now(tz=timezone.utc).isoformat(),
-        "outcome": f"quorum {quorum:.0%} ({'reached' if quorum >= 0.75 else 'below threshold'})",
-    })
-    log.info("orchestrator.phase4.done session_id=%s quorum=%.2f", session_id, quorum)
+            if action_type == "PRESENT_ITEMS":
+                backlog_items = await _handle_present_items(session, slots, phase_id, phase_name, assignments, phase_history)
+                outcome = f"{len(backlog_items)} items received"
+            elif action_type == "VOTE":
+                vote_scores = await _handle_vote(session, slots, backlog_items or [], phase_id, phase_name, assignments, phase_history)
+                action_context["vote_scores"] = vote_scores
+            elif action_type == "SELECT":
+                selected_items = await _handle_select(session, backlog_items or [], action_context.get("vote_scores", {}))
+                outcome = f"{len(selected_items)} items selected"
+            elif action_type == "ASSIGN":
+                assignments = await _handle_assign(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history)
+                outcome = f"{len(assignments)} items assigned"
+            elif action_type == "CONFIRM":
+                quorum = await _handle_confirm(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history)
+                outcome = f"quorum {quorum:.0%}"
 
-    # ── Transition to COMPLETED (AC8: single atomic commit) ───────────────────
+        phase_history.append({
+            "phase_id": phase_id,
+            "completed_at": datetime.now(tz=timezone.utc).isoformat(),
+            "outcome": outcome,
+        })
+
+        updates = {"phase_history": phase_history}
+        if backlog_items is not None:
+            updates["backlog_items"] = backlog_items
+        if selected_items is not None:
+            updates["selected_items"] = selected_items
+        if assignments:
+            updates["assignments"] = assignments
+        await _commit_ctx(session_id, updates)
+        log.info("orchestrator.phase.done session_id=%s phase_id=%s outcome=%s", session_id, phase_id, outcome)
+
+    # ── Transition to COMPLETED ───────────────────
     async with SessionLocal() as db:
         result = await db.execute(select(Session).where(Session.id == session_id))
         session_row = result.scalar_one()
         _guard_transition(session_row, "COMPLETED")
         session_row.status = "COMPLETED"
-        ctx = dict(session_row.context or {})
-        ctx["phase_history"] = phase_history
-        session_row.context = ctx
         await db.commit()
 
     log.info("orchestrator.completed session_id=%s", session_id)
@@ -285,29 +273,18 @@ def _build_sprint_backlog(
     selected_items: list[str],
     assignments: dict[str, str],
 ) -> dict[str, Any]:
-    """Construct the canonical sprint_backlog payload (AC1, AC3, AC4, AC5).
-
-    AC3: Only standardised BacklogItem fields are included — internal source-system
-         metadata is intentionally excluded (BacklogItem schema enforced by Pydantic
-         during Phase 1 ingestion).
-    AC4: Each assignment entry carries both assignee_id and assignee_name.
-    AC5: A single dict is built once and sent verbatim to every participant
-         (byte-identical delivery guaranteed by shared reference before serialisation).
-    """
     # Build lookup maps
     item_lookup: dict[str, dict] = {item["item_id"]: item for item in backlog_items}
     name_lookup: dict[str, str] = {
         s.participant_id: s.name for s in slots if s.participant_id
     }
 
-    # Build the selected items list with standardised schema + assignee info (AC3, AC4)
     selected_item_entries: list[dict] = []
     for item_id in selected_items:
         item = item_lookup.get(item_id, {"item_id": item_id})
         assignee_id = assignments.get(item_id)
         assignee_name = name_lookup.get(assignee_id, assignee_id) if assignee_id else None
         selected_item_entries.append({
-            # Standardised BacklogItem fields only (AC3)
             "item_id": item.get("item_id", item_id),
             "title": item.get("title", ""),
             "description": item.get("description", ""),
@@ -315,12 +292,10 @@ def _build_sprint_backlog(
             "story_points": item.get("story_points"),
             "labels": item.get("labels", []),
             "dependencies": item.get("dependencies", []),
-            # Assignment enrichment (AC4)
             "assignee_id": assignee_id,
             "assignee_name": assignee_name,
         })
 
-    # Build the capacity_plan summary (AC1): per-assignee story point totals
     capacity_by_assignee: dict[str, int] = {}
     for entry in selected_item_entries:
         aid = entry["assignee_id"]
@@ -352,18 +327,10 @@ async def _broadcast_sprint_backlog(
     sprint_backlog: dict[str, Any],
     slots: list[_SlotSnap],
 ) -> None:
-    """Send the canonical sprint_backlog task to every joined participant (AC2, AC5, AC6).
-
-    AC5: The same `sprint_backlog` dict is serialised once per delivery — all
-         participants receive the same canonical payload.
-    AC6: Individual delivery failures are logged but do not raise; the session
-         has already been marked COMPLETED before this function is called.
-    """
     all_joined = _reachable_slots(slots)
 
     async def deliver(slot: _SlotSnap) -> None:
         try:
-            # Build a minimal session_ctx for the sprint_backlog task
             session_ctx = {
                 "session_id": sprint_backlog["session_id"],
                 "sprint_goal": sprint_backlog["sprint_goal"],
@@ -378,7 +345,7 @@ async def _broadcast_sprint_backlog(
                 "sprint_backlog.delivered session_id=%s slot=%s",
                 sprint_backlog["session_id"], slot.id,
             )
-        except Exception as exc:  # AC6: log, never raise
+        except Exception as exc:
             log.warning(
                 "sprint_backlog.delivery_failed session_id=%s slot=%s exc=%s",
                 sprint_backlog["session_id"], slot.id, exc,
@@ -387,21 +354,23 @@ async def _broadcast_sprint_backlog(
     await asyncio.gather(*[deliver(s) for s in all_joined], return_exceptions=True)
 
 
-# ── Phase 1: Backlog Presentation ─────────────────────────────────────────────
+# ── Action Handlers ─────────────────────────────────────────────────────────────
 
 
-async def _phase1_backlog_presentation(
+async def _handle_present_items(
     session: _SessionSnap,
     slots: list[_SlotSnap],
-    phase_history: list[dict],
+    phase_id: str,
+    phase_name: str,
     assignments: dict[str, str],
+    phase_history: list[dict],
 ) -> list[dict]:
     po_slots = _reachable_slots(slots, roles={"PRODUCT_OWNER"})
     if not po_slots:
-        raise RuntimeError("No reachable PRODUCT_OWNER slot for phase 1")
+        raise RuntimeError("No reachable PRODUCT_OWNER slot for PRESENT_ITEMS")
 
     ctx = _build_ctx(
-        session, slots, "backlog_presentation", "Backlog Presentation", 1,
+        session, slots, phase_id, phase_name, 1,
         None, None, assignments, phase_history,
     )
     po = po_slots[0]
@@ -423,7 +392,7 @@ async def _phase1_backlog_presentation(
             validated.append(item.model_dump())
         except ValidationError as exc:
             log.warning(
-                "orchestrator.phase1.invalid_item item_id=%s err=%s",
+                "orchestrator.present_items.invalid_item item_id=%s err=%s",
                 raw.get("item_id"), exc,
             )
 
@@ -433,21 +402,20 @@ async def _phase1_backlog_presentation(
     return validated
 
 
-# ── Phase 2: Prioritisation ───────────────────────────────────────────────────
-
-
-async def _phase2_prioritisation(
+async def _handle_vote(
     session: _SessionSnap,
     slots: list[_SlotSnap],
     backlog_items: list[dict],
-    phase_history: list[dict],
+    phase_id: str,
+    phase_name: str,
     assignments: dict[str, str],
-) -> list[str]:
+    phase_history: list[dict],
+) -> dict[str, int]:
     all_reachable = _reachable_slots(slots)
     item_ids = [item["item_id"] for item in backlog_items]
 
     ctx = _build_ctx(
-        session, slots, "prioritization", "Prioritisation", 1,
+        session, slots, phase_id, phase_name, 1,
         backlog_items, None, assignments, phase_history,
     )
 
@@ -460,7 +428,7 @@ async def _phase2_prioritisation(
         )
         if not r.ok:
             log.warning(
-                "orchestrator.phase2.vote_failed slot=%s err=%s", slot.id, r.error
+                "orchestrator.vote_failed slot=%s err=%s", slot.id, r.error
             )
             return {}
         return (r.artifact or {}).get("votes", {})
@@ -469,7 +437,6 @@ async def _phase2_prioritisation(
         *[get_votes(s) for s in all_reachable], return_exceptions=True
     )
 
-    # Tally dot votes (AC2)
     scores: dict[str, int] = {iid: 0 for iid in item_ids}
     for v in vote_results:
         if isinstance(v, dict):
@@ -477,12 +444,20 @@ async def _phase2_prioritisation(
                 if iid in scores:
                     scores[iid] += _PRIORITY_SCORE.get(str(priority), 0)
 
-    ranked = sorted(item_ids, key=lambda iid: scores[iid], reverse=True)
+    return scores
+
+
+async def _handle_select(
+    session: _SessionSnap,
+    backlog_items: list[dict],
+    vote_scores: dict[str, int],
+) -> list[str]:
+    item_ids = [item["item_id"] for item in backlog_items]
+    ranked = sorted(item_ids, key=lambda iid: vote_scores.get(iid, 0), reverse=True)
 
     if session.sprint_capacity is None:
-        return ranked  # no capacity limit → select all ranked items
+        return ranked
 
-    # Greedy selection by story points (AC2)
     sp_lookup: dict[str, int] = {
         item["item_id"]: (item.get("story_points") or 1) for item in backlog_items
     }
@@ -493,26 +468,25 @@ async def _phase2_prioritisation(
         if used + sp <= session.sprint_capacity:
             selected.append(iid)
             used += sp
-    return selected or ranked[:1]   # always select at least one item
+    return selected or ranked[:1]
 
 
-# ── Phase 3: Assignment ───────────────────────────────────────────────────────
-
-
-async def _phase3_assignment(
+async def _handle_assign(
     session: _SessionSnap,
     slots: list[_SlotSnap],
     backlog_items: list[dict],
     selected_items: list[str],
-    phase_history: list[dict],
     initial_assignments: dict[str, str],
+    phase_id: str,
+    phase_name: str,
+    phase_history: list[dict],
 ) -> dict[str, str]:
     assignments = dict(initial_assignments)
     eligible = _reachable_slots(slots, roles={"DEVELOPER", "ARCHITECT"})
     all_reachable = _reachable_slots(slots)
 
     if not eligible:
-        log.warning("orchestrator.phase3.no_eligible session_id=%s", session.id)
+        log.warning("orchestrator.assign.no_eligible session_id=%s", session.id)
         return assignments
 
     item_lookup = {item["item_id"]: item for item in backlog_items}
@@ -520,15 +494,14 @@ async def _phase3_assignment(
     for item_id in selected_items:
         item = item_lookup.get(item_id, {"item_id": item_id, "title": item_id, "description": ""})
         assignee_id, reason = await _assign_item(
-            session, slots, eligible, backlog_items, selected_items, item, assignments, phase_history
+            session, slots, eligible, backlog_items, selected_items, item, assignments, phase_id, phase_name, phase_history
         )
         if assignee_id:
             assignments[item_id] = assignee_id
-            # Broadcast assignment with the updated assignments map (AC3)
             await _broadcast_acknowledge(
                 session, slots, all_reachable,
                 item_id, assignee_id, reason,
-                backlog_items, selected_items, assignments, phase_history,
+                backlog_items, selected_items, assignments, phase_id, phase_name, phase_history,
             )
 
     return assignments
@@ -542,11 +515,12 @@ async def _assign_item(
     selected_items: list[str],
     item: dict,
     assignments: dict[str, str],
+    phase_id: str,
+    phase_name: str,
     phase_history: list[dict],
 ) -> tuple[str | None, str]:
-    """VOLUNTEER_FIRST → AUTO_BALANCE decision tree (AC3). Returns (assignee_id, reason)."""
     ctx = _build_ctx(
-        session, slots, "assignment", "Assignment", 1,
+        session, slots, phase_id, phase_name, 1,
         backlog_items, selected_items, assignments, phase_history,
     )
 
@@ -570,20 +544,17 @@ async def _assign_item(
     volunteers: list[_SlotSnap] = [v for v in raw if isinstance(v, _SlotSnap)]
 
     if not volunteers:
-        # AUTO_BALANCE: lowest-load participant (AC3, AC7)
         winner = _pick_lowest_load(eligible, assignments)
         return (winner.participant_id if winner else None, "AUTO_BALANCE")
 
     if len(volunteers) == 1:
         return (volunteers[0].participant_id, "VOLUNTEERED")
 
-    # Multiple volunteers → CONFLICT_RESOLVED: pick by lowest load (AC3, AC7)
     winner = _pick_lowest_load(volunteers, assignments)
     return (winner.participant_id if winner else volunteers[0].participant_id, "CONFLICT_RESOLVED")
 
 
 def _pick_lowest_load(slots: list[_SlotSnap], assignments: dict[str, str]) -> _SlotSnap | None:
-    """Pick the slot with the fewest current-session assignments (AC7: no external queries)."""
     if not slots:
         return None
     load: dict[str | None, int] = {s.participant_id: 0 for s in slots}
@@ -605,13 +576,15 @@ async def _broadcast_acknowledge(
     backlog_items: list[dict],
     selected_items: list[str],
     assignments: dict[str, str],
+    phase_id: str,
+    phase_name: str,
     phase_history: list[dict],
 ) -> None:
     assignee_name = next(
         (s.name for s in slots if s.participant_id == assignee_id), assignee_id
     )
     ctx = _build_ctx(
-        session, slots, "assignment", "Assignment", 1,
+        session, slots, phase_id, phase_name, 1,
         backlog_items, selected_items, assignments, phase_history,
     )
 
@@ -629,30 +602,28 @@ async def _broadcast_acknowledge(
                 },
             )
         except Exception as exc:
-            log.warning("orchestrator.phase3.ack_failed slot=%s exc=%s", slot.id, exc)
+            log.warning("orchestrator.assign.ack_failed slot=%s exc=%s", slot.id, exc)
 
     await asyncio.gather(*[notify(s) for s in all_reachable], return_exceptions=True)
 
 
-# ── Phase 4: Confirmation ─────────────────────────────────────────────────────
-
-
-async def _phase4_confirmation(
+async def _handle_confirm(
     session: _SessionSnap,
     slots: list[_SlotSnap],
     backlog_items: list[dict],
     selected_items: list[str],
     assignments: dict[str, str],
+    phase_id: str,
+    phase_name: str,
     phase_history: list[dict],
 ) -> float:
-    """Send confirm to all reachable slots; return quorum fraction (AC4)."""
     reachable = _reachable_slots(slots)
     total = len(reachable)
     if total == 0:
         return 1.0
 
     ctx = _build_ctx(
-        session, slots, "confirmation", "Confirmation", 1,
+        session, slots, phase_id, phase_name, 1,
         backlog_items, selected_items, assignments, phase_history,
     )
 
@@ -669,18 +640,17 @@ async def _phase4_confirmation(
         )
         if not r.ok:
             log.warning(
-                "orchestrator.phase4.confirm_failed slot=%s err=%s", slot.id, r.error
+                "orchestrator.confirm_failed slot=%s err=%s", slot.id, r.error
             )
             return False
         artifact = r.artifact or {}
-        # Accept both {confirmed: true} and legacy {ack: true} responses
         return bool(artifact.get("confirmed", artifact.get("ack", False)))
 
     results = await asyncio.gather(*[get_confirm(s) for s in reachable], return_exceptions=True)
     confirmed_count = sum(1 for r in results if r is True)
     quorum = confirmed_count / total
     log.info(
-        "orchestrator.phase4 confirmed=%d total=%d quorum=%.2f",
+        "orchestrator.confirm confirmed=%d total=%d quorum=%.2f",
         confirmed_count, total, quorum,
     )
     return quorum

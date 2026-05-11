@@ -9,12 +9,14 @@ from app.db import engine, init_db
 from app.logging_setup import configure_logging
 from app.message_bus import close_bus, init_bus
 from app.session_service import restore_pending_timeouts
+from app.template_loader import load_templates
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging(settings.log_level)
     await init_db()
+    await load_templates()
     await init_bus()
     await restore_pending_timeouts()
     yield

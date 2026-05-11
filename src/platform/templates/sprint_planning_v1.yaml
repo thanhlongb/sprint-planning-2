@@ -1,0 +1,60 @@
+ProcessTemplate:
+  template_id: "sprint_planning_v1"
+  name: "Sprint Planning 2.0 — Standard"
+  description: "Human-AI collaborative sprint planning session"
+
+  phases:
+    - phase_id: "backlog_presentation"
+      name: "Backlog Presentation"
+      description: "PO presents candidate backlog items"
+      required_roles: ["PRODUCT_OWNER"]
+      actions:
+        - type: PRESENT_ITEMS
+          source: participant.backlog_items
+          min_items: 1
+          max_items: null
+      turn_order: ROLE_FIRST
+      duration_limit: null
+      transition: AUTO
+
+    - phase_id: "prioritization"
+      name: "Selection & Prioritisation"
+      description: "Team selects items for the sprint backlog"
+      required_roles: ["PRODUCT_OWNER", "DEVELOPER", "SCRUM_MASTER"]
+      actions:
+        - type: VOTE
+          method: DOT_VOTING
+        - type: SELECT
+          constraint: capacity_based
+      turn_order: ALL_PARALLEL
+
+    - phase_id: "assignment"
+      name: "Task Assignment"
+      description: "Selected items are assigned to participants"
+      required_roles: ["DEVELOPER"]
+      actions:
+        - type: ASSIGN
+          strategy: VOLUNTEER_FIRST
+          fallback: AUTO_BALANCE
+          conflict_resolution: LOWEST_LOAD
+          timeout_ms: 5000
+      turn_order: FACILITATOR_LED
+
+    - phase_id: "confirmation"
+      name: "Sprint Goal & Confirmation"
+      description: "Team confirms sprint goal and backlog"
+      required_roles: ALL
+      actions:
+        - type: CONFIRM
+          requires_unanimous: false
+          quorum: 0.75
+      turn_order: ALL_PARALLEL
+
+  inputs:
+    - product_backlog           # From PRODUCT_OWNER participant
+    - capacity_constraints      # From all participants
+
+  outputs:
+    - sprint_backlog            # Selected items with assignments
+    - sprint_goal               # Agreed-upon goal statement
+    - capacity_plan             # Who does what, estimated effort

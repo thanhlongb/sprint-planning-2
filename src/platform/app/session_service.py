@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.a2a.client import A2AClient
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Participant, Session, SessionParticipant
+from app.models import Participant, Session, SessionParticipant, Template
 
 # Imported lazily inside functions to avoid circular import at module load time.
 # (phase_orchestrator imports session_service._transition, so a top-level import
@@ -32,13 +32,6 @@ def _get_run_orchestrator():
     return run_orchestrator
 
 log = logging.getLogger(__name__)
-
-# ── Hard-coded Phase-1 template definition ────────────────────────────────────
-# First-phase required_roles per template_id.  When the join timeout fires we
-# compare absentee roles against this set to decide ACTIVE-with-note vs ABORT.
-_FIRST_PHASE_REQUIRED_ROLES: dict[str, set[str]] = {
-    "sprint_planning_v1": {"PRODUCT_OWNER"},
-}
 
 # ── In-process timeout task registry ─────────────────────────────────────────
 # Maps session_id → asyncio.Task.  Used only by the current process; restored
@@ -142,7 +135,19 @@ async def _evaluate_timeout(session_id: str) -> None:
         slots = list(slots_result.scalars())
 
         absent_roles = {s.role for s in slots if s.status == "declared"}
-        required = _FIRST_PHASE_REQUIRED_ROLES.get(session.template, set())
+
+        template_result = await db.execute(select(Template).where(Template.id == session.template))
+        template_row = template_result.scalar_one_or_none()
+        required = set()
+        if template_row and template_row.phases:
+            first_phase = template_row.phases[0]
+            req_roles = first_phase.get("required_roles", [])
+            if req_roles == "ALL":
+                # For ALL, we require every defined slot
+                required = {s.role for s in slots}
+            else:
+                required = set(req_roles)
+
         missing_required = absent_roles & required
 
         absent_names = [s.name for s in slots if s.status == "declared"]

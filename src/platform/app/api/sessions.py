@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_session
-from app.models import Participant, Session, SessionParticipant
+from app.models import Participant, Session, SessionParticipant, Template
 from app.session_service import (
     maybe_activate,
     schedule_timeout,
@@ -140,6 +140,15 @@ async def create_session(
     req: CreateSessionRequest,
     db: AsyncSession = Depends(get_session),
 ) -> SessionOut:
+    # Validate template exists
+    template_result = await db.execute(select(Template).where(Template.id == req.template))
+    template_row = template_result.scalar_one_or_none()
+    if not template_row:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "invalid_template", "template": req.template}
+        )
+
     timeout_at = datetime.now(tz=timezone.utc) + timedelta(minutes=settings.join_timeout_minutes)
 
     session = Session(

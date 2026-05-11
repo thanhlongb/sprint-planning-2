@@ -48,3 +48,16 @@ class SessionParticipant(Base):
     endpoint: Mapped[str | None] = mapped_column(String, nullable=True)
     # "declared" | "joined" | "absent"
     status: Mapped[str] = mapped_column(String, nullable=False, default="declared")
+
+
+class Template(Base):
+    __tablename__ = "templates"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(String, nullable=False, default="")
+    raw_yaml: Mapped[str] = mapped_column(String, nullable=False)
+    phases: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+    inputs: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    outputs: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
