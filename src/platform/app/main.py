@@ -3,14 +3,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import participants, sessions
+from app.api import a2a_debug, participants, sessions
 from app.config import settings
 from app.db import engine, init_db
+from app.logging_setup import configure_logging
 from app.message_bus import close_bus, init_bus
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging(settings.log_level)
     await init_db()
     await init_bus()
     yield
@@ -35,3 +37,4 @@ async def health() -> dict[str, str]:
 
 app.include_router(participants.router, prefix="/participants", tags=["participants"])
 app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
+app.include_router(a2a_debug.router, prefix="/a2a", tags=["a2a"])

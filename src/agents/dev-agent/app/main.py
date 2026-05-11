@@ -1,9 +1,17 @@
+"""Reference DEVELOPER A2A Remote Agent.
+
+Agent side of US-01: accepts the new task envelope and responds synchronously
+(all developer tasks are short).
+"""
+
+from __future__ import annotations
+
 import os
 import random
-from uuid import uuid4
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "dev-agent")
 AGENT_PUBLIC_URL = os.environ.get("AGENT_PUBLIC_URL", "http://localhost:8002")
@@ -12,9 +20,10 @@ app = FastAPI(title=f"{AGENT_NAME} (A2A Remote Agent)")
 
 
 class Task(BaseModel):
-    type: str
-    session_ctx: dict | None = None
-    payload: dict | None = None
+    task_id: str
+    task_type: str
+    session_ctx: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 @app.get("/.well-known/agent.json")
@@ -35,30 +44,34 @@ async def agent_card() -> dict:
 
 @app.post("/a2a/tasks")
 async def receive_task(task: Task) -> dict:
-    task_id = str(uuid4())
-    payload = task.payload or {}
+    if task.task_type in (
+        "session_invite",
+        "session_ready",
+        "confirm",
+        "session_aborted",
+        "acknowledge_assignment",
+    ):
+        return {
+            "task_id": task.task_id,
+            "status": "completed",
+            "artifact": {"ack": True},
+        }
 
-    if task.type in ("session_invite", "session_ready", "confirm", "session_aborted"):
-        return {"task_id": task_id, "status": "completed", "artifact": {"ack": True}}
-
-    if task.type == "vote":
-        items = payload.get("items", [])
+    if task.task_type == "vote":
+        items = task.payload.get("items", [])
         priorities = ["HIGH", "MEDIUM", "LOW"]
         return {
-            "task_id": task_id,
+            "task_id": task.task_id,
             "status": "completed",
             "artifact": {"votes": {item: random.choice(priorities) for item in items}},
         }
 
-    if task.type == "assign_opportunity":
-        item_id = payload.get("item_id")
+    if task.task_type == "assign_opportunity":
+        item_id = task.payload.get("item_id")
         return {
-            "task_id": task_id,
+            "task_id": task.task_id,
             "status": "completed",
             "artifact": {"volunteer": True, "item_id": item_id, "estimate": 3},
         }
 
-    if task.type == "acknowledge_assignment":
-        return {"task_id": task_id, "status": "completed", "artifact": {"ack": True}}
-
-    raise HTTPException(400, f"Unsupported task type: {task.type}")
+    raise HTTPException(400, f"Unsupported task type: {task.task_type}")
