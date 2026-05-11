@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # AC5: shared bearer token used when an agent declares scheme="bearer".
     # Per-agent token storage is intentionally out of scope for Phase 1.
     a2a_bearer_token: str | None = None
+    platform_base_url: str = "http://localhost:8000"
+    # Hard-coded Phase-1 join timeout (minutes).
+    join_timeout_minutes: int = 15
 
 
 settings = Settings()

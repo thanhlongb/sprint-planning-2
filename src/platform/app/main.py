@@ -8,6 +8,7 @@ from app.config import settings
 from app.db import engine, init_db
 from app.logging_setup import configure_logging
 from app.message_bus import close_bus, init_bus
+from app.session_service import restore_pending_timeouts
 
 
 @asynccontextmanager
@@ -15,6 +16,7 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.log_level)
     await init_db()
     await init_bus()
+    await restore_pending_timeouts()
     yield
     await close_bus()
     await engine.dispose()
