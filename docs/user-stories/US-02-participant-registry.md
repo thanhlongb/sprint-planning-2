@@ -7,13 +7,13 @@
 As an **agent developer**, I want to register my A2A Remote Agent with the platform once and receive a stable `participant_id`, so that I can join any future session without re-onboarding.
 
 ## Acceptance Criteria
-- AC1: `POST /register` accepts an `agent_url` and fetches `{agent_url}/.well-known/agent.json`.
-- AC2: Platform validates the Agent Card contains required fields: `name`, `role`, `capabilities`, `endpoint`, `auth`.
-- AC3: Platform validates declared `capabilities` against the contract for the declared `role` (e.g. `PRODUCT_OWNER` must declare `can_provide_backlog: true`).
-- AC4: On success, the platform returns `201 { participant_id, status: "REGISTERED" }`.
-- AC5: On validation failure, the platform returns `4xx` with a machine-readable error reason (missing field, role/capability mismatch, unreachable URL).
-- AC6: The registry persists `participant_id`, `endpoint`, `role`, and validated capabilities. The full Agent Card body is **not** stored.
-- AC7: A registered `participant_id` can be reused indefinitely across sessions.
+- [x] AC1: `POST /register` accepts an `agent_url` and fetches `{agent_url}/.well-known/agent.json`.
+- [x] AC2: Platform validates the Agent Card contains required fields: `name`, `role`, `capabilities`, `endpoint`, `auth`.
+- [x] AC3: Platform validates declared `capabilities` against the contract for the declared `role` (e.g. `PRODUCT_OWNER` must declare `can_provide_backlog: true`).
+- [x] AC4: On success, the platform returns `201 { participant_id, status: "REGISTERED" }`.
+- [x] AC5: On validation failure, the platform returns `4xx` with a machine-readable error reason (missing field, role/capability mismatch, unreachable URL).
+- [x] AC6: The registry persists `participant_id`, `endpoint`, `role`, and validated capabilities. The full Agent Card body is **not** stored.
+- [x] AC7: A registered `participant_id` can be reused indefinitely across sessions.
 
 ## Out of Scope
 - Centralised public registry of agents (each company hosts its own card).

@@ -44,12 +44,15 @@ async def send_task(
         raise HTTPException(404, f"participant {req.participant_id} not registered")
 
     session_ctx = {"session_id": req.session_id, **req.session_ctx}
+    # The full Agent Card (including auth) is intentionally not stored per US-02 AC6.
+    # Phase 1 reference agents all use auth.scheme=none; bearer support will land
+    # with per-agent token storage (US-15). Until then the platform-wide token is tried.
     result = await _client.send_task(
         endpoint=participant.endpoint,
         task_type=req.task_type,
         session_ctx=session_ctx,
         payload=req.payload,
-        auth=participant.agent_card.get("auth"),
+        auth=None,
         bearer_token=settings.a2a_bearer_token,
         duration_limit_seconds=req.duration_limit_seconds,
     )
