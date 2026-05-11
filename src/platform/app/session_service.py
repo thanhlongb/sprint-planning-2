@@ -24,6 +24,13 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import Participant, Session, SessionParticipant
 
+# Imported lazily inside functions to avoid circular import at module load time.
+# (phase_orchestrator imports session_service._transition, so a top-level import
+# here would create a circular dependency.)
+def _get_run_orchestrator():
+    from app.phase_orchestrator import run_orchestrator  # noqa: PLC0415
+    return run_orchestrator
+
 log = logging.getLogger(__name__)
 
 # ── Hard-coded Phase-1 template definition ────────────────────────────────────
@@ -164,6 +171,7 @@ async def _evaluate_timeout(session_id: str) -> None:
                 select(SessionParticipant).where(SessionParticipant.session_id == session_id)
             )
             await _broadcast_ready(session, list(slots_result2.scalars()), note)
+            asyncio.create_task(_get_run_orchestrator()(session_id))
 
 
 async def _run_timeout(session_id: str, timeout_at: datetime) -> None:
@@ -210,6 +218,7 @@ async def maybe_activate(session_id: str, db: AsyncSession) -> bool:
     await db.commit()
     log.info("session.active_all_joined session_id=%s", session_id)
     await _broadcast_ready(session, slots, note=None)
+    asyncio.create_task(_get_run_orchestrator()(session_id))
     return True
 
 

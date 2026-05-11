@@ -47,7 +47,6 @@ async def receive_task(task: Task) -> dict:
     if task.task_type in (
         "session_invite",
         "session_ready",
-        "confirm",
         "session_aborted",
         "acknowledge_assignment",
     ):
@@ -55,6 +54,13 @@ async def receive_task(task: Task) -> dict:
             "task_id": task.task_id,
             "status": "completed",
             "artifact": {"ack": True},
+        }
+
+    if task.task_type == "confirm":
+        return {
+            "task_id": task.task_id,
+            "status": "completed",
+            "artifact": {"confirmed": True},
         }
 
     if task.task_type == "vote":
