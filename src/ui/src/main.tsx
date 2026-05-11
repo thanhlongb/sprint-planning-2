@@ -1,9 +1,21 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { Toaster } from "@/components/ui/sonner";
+import "./index.css";
+import JoinPage from "./pages/JoinPage";
+import SessionPage from "./pages/SessionPage";
+import HomePage from "./pages/HomePage";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/join/:session_id" element={<JoinPage />} />
+        <Route path="/session/:session_id" element={<SessionPage />} />
+      </Routes>
+      <Toaster position="top-right" richColors />
+    </BrowserRouter>
+  </React.StrictMode>
 );

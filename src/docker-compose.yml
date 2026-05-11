@@ -84,14 +84,33 @@ services:
       dockerfile: Dockerfile
     environment:
       VITE_PLATFORM_URL: http://localhost:8000
+      VITE_PROXY_URL: http://localhost:5174
     ports:
       - "5173:5173"
     depends_on:
       - platform
+      - ui-proxy
     volumes:
       - ./ui/src:/app/src
       - ./ui/index.html:/app/index.html
     command: npm run dev -- --host 0.0.0.0
 
+  ui-proxy:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    environment:
+      PROXY_PORT: "5174"
+      PROXY_PUBLIC_URL: http://ui-proxy:5174
+      PLATFORM_URL: http://platform:8000
+    ports:
+      - "5174:5174"
+    depends_on:
+      - platform
+    volumes:
+      - ./ui/server:/app/server
+    command: bun run server/index.ts
+
 volumes:
   postgres_data:
+

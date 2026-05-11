@@ -84,6 +84,8 @@ class JoinByParticipantId(BaseModel):
 class JoinByHuman(BaseModel):
     name: str
     role: str
+    endpoint: str | None = None  # A2A proxy URL (AC1 of US-07)
+
 
 
 class JoinResponse(BaseModel):
@@ -298,8 +300,12 @@ async def join_session(
         new_pid = str(uuid4())
         slot.participant_id = new_pid
         slot.status = "joined"
+        # Store the proxy endpoint so the orchestrator can dispatch A2A tasks (US-07 AC1)
+        if body.endpoint:
+            slot.endpoint = body.endpoint
         await db.flush()
         assigned_id = new_pid
+
 
     # Refresh slot list after update.
     slots_result2 = await db.execute(
