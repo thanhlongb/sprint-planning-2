@@ -1,0 +1,97 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sprint
+      POSTGRES_PASSWORD: sprint
+      POSTGRES_DB: sprint_planning
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sprint -d sprint_planning"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  platform:
+    build:
+      context: ./platform
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sprint:sprint@postgres:5432/sprint_planning
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./platform/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  po-agent:
+    build:
+      context: ./agents/po-agent
+      dockerfile: Dockerfile
+    environment:
+      AGENT_NAME: po-agent
+      AGENT_ROLE: PRODUCT_OWNER
+      AGENT_PUBLIC_URL: http://po-agent:8001
+      PLATFORM_URL: http://platform:8000
+    ports:
+      - "8001:8001"
+    depends_on:
+      - platform
+    volumes:
+      - ./agents/po-agent/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+
+  dev-agent:
+    build:
+      context: ./agents/dev-agent
+      dockerfile: Dockerfile
+    environment:
+      AGENT_NAME: dev-agent
+      AGENT_ROLE: DEVELOPER
+      AGENT_PUBLIC_URL: http://dev-agent:8002
+      PLATFORM_URL: http://platform:8000
+    ports:
+      - "8002:8002"
+    depends_on:
+      - platform
+    volumes:
+      - ./agents/dev-agent/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    environment:
+      VITE_PLATFORM_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - platform
+    volumes:
+      - ./ui/src:/app/src
+      - ./ui/index.html:/app/index.html
+    command: npm run dev -- --host 0.0.0.0
+
+volumes:
+  postgres_data:
