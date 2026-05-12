@@ -14,9 +14,9 @@ export default defineConfig({
     host: true,
     port: 5173,
     proxy: {
-      "/proxy": "http://localhost:5174",
-      "/a2a": "http://localhost:5174",
-      "/.well-known": "http://localhost:5174",
+      "/proxy": process.env.PROXY_TARGET || "http://localhost:5174",
+      "/a2a": process.env.PROXY_TARGET || "http://localhost:5174",
+      "/.well-known": process.env.PROXY_TARGET || "http://localhost:5174",
     },
   },
 });

@@ -97,7 +97,26 @@ def _count_own_assignments(session_ctx: dict[str, Any]) -> int:
 async def receive_task(task: Task, request: Request) -> dict:
     _check_auth(request)
 
-    if task.task_type in ("session_invite", "session_ready", "session_aborted", "acknowledge_assignment"):
+    if task.task_type == "session_invite":
+        import asyncio
+        import httpx
+        async def auto_join():
+            own_id = _own_participant_id(task.session_ctx)
+            if own_id:
+                session_id = task.session_ctx.get("session_id")
+                platform_url = os.environ.get("PLATFORM_URL", "http://platform:8000")
+                async with httpx.AsyncClient() as client:
+                    try:
+                        await client.post(
+                            f"{platform_url}/sessions/{session_id}/join",
+                            json={"participant_id": own_id}
+                        )
+                    except Exception as e:
+                        print(f"Failed to auto-join: {e}")
+        asyncio.create_task(auto_join())
+        return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
+
+    if task.task_type in ("session_ready", "session_aborted", "acknowledge_assignment"):
         return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
 
     if task.task_type == "vote":

@@ -138,6 +138,14 @@ def _check_auth(request: Request) -> None:
         )
 
 
+def _own_participant_id(session_ctx: dict[str, Any]) -> str | None:
+    """Resolve this agent's participant_id by matching AGENT_NAME in participants list."""
+    for p in (session_ctx.get("participants") or []):
+        if p.get("name") == AGENT_NAME:
+            return p.get("participant_id")
+    return None
+
+
 # ── Task endpoint (AC3) ────────────────────────────────────────────────────────
 
 
@@ -153,8 +161,30 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
         response.status_code = 202
         return {"task_id": task.task_id, "status": "working"}
 
+    if task.task_type == "session_invite":
+        import httpx
+        async def auto_join():
+            own_id = _own_participant_id(task.session_ctx)
+            if own_id:
+                session_id = task.session_ctx.get("session_id")
+                platform_url = os.environ.get("PLATFORM_URL", "http://platform:8000")
+                async with httpx.AsyncClient() as client:
+                    try:
+                        await client.post(
+                            f"{platform_url}/sessions/{session_id}/join",
+                            json={"participant_id": own_id}
+                        )
+                    except Exception as e:
+                        print(f"Failed to auto-join: {e}")
+        asyncio.create_task(auto_join())
+        return {
+            "task_id": task.task_id,
+            "status": "completed",
+            "artifact": {"ack": True},
+        }
+
     # Simple acknowledgement messages — no session state required.
-    if task.task_type in ("session_invite", "session_ready", "session_aborted", "acknowledge_assignment"):
+    if task.task_type in ("session_ready", "session_aborted", "acknowledge_assignment"):
         return {
             "task_id": task.task_id,
             "status": "completed",

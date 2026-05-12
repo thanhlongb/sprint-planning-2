@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # Per-agent token storage is intentionally out of scope for Phase 1.
     a2a_bearer_token: str | None = None
     platform_base_url: str = "http://localhost:8000"
+    ui_base_url: str = "http://localhost:5173"
     # Hard-coded Phase-1 join timeout (minutes).
     join_timeout_minutes: int = 15
 

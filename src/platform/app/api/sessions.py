@@ -149,7 +149,7 @@ async def create_session(
             detail={"reason": "invalid_template", "template": req.template}
         )
 
-    timeout_at = datetime.now(tz=timezone.utc) + timedelta(minutes=settings.join_timeout_minutes)
+    timeout_at = datetime.utcnow() + timedelta(minutes=settings.join_timeout_minutes)
 
     session = Session(
         template=req.template,
@@ -162,7 +162,7 @@ async def create_session(
     db.add(session)
     await db.flush()  # get the id without committing
 
-    session.join_url = f"{settings.platform_base_url.rstrip('/')}/sessions/{session.id}/join"
+    session.join_url = f"{settings.ui_base_url.rstrip('/')}/join/{session.id}"
 
     # Build SessionParticipant slots for each declared participant.
     slots: list[SessionParticipant] = []
