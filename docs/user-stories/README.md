@@ -25,7 +25,8 @@ Stories are derived from the roadmap in [design-doc.md §14](../design-doc.md). 
 - [US-16: Agent Card Discovery & Revalidation](US-16-agent-card-revalidation.md)
 - [US-17: Scalability Testing](US-17-scalability-testing.md)
 - [US-18: Template Authoring UI](US-18-template-authoring-ui.md)
-
+- [US-24: LLM-Backed PO Agent (Dynamic)](US-24-llm-po-agent.md)
+- [US-25: LLM-Backed Dev Agent (Reasoning)](US-25-llm-dev-agent.md)
 ### Phase 4 — Evaluation & Paper (Weeks 7–8)
 - [US-19: Human-AI User Study](US-19-human-ai-study.md)
 - [US-20: Evaluation Metrics Collection](US-20-metrics-collection.md)
