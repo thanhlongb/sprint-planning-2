@@ -18,7 +18,12 @@ import { cors } from "hono/cors";
 
 const PORT = Number(process.env.PROXY_PORT ?? 5174);
 const PUBLIC_URL = (process.env.PROXY_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
-const PLATFORM_URL = (process.env.PLATFORM_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const PLATFORM_URL = (process.env.PLATFORM_URL ?? "http://platform:8000").replace(/\/$/, "");
+
+// Global unhandled rejection handler to prevent process exit on floating promises
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[ui-proxy] Unhandled Rejection at:", promise, "reason:", reason);
+});
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -151,25 +156,38 @@ app.get("/a2a/tasks/:task_id", async (c) => {
     }
 
     // Send initial working event
-    await write({ task_id, status: "working", progress: "awaiting human response" });
+    try {
+      await write({ task_id, status: "working", progress: "awaiting human response" });
+    } catch (err) {
+      console.error(`[ui-proxy] Initial write failed for task ${task_id}:`, err);
+      await writer.close().catch(() => {});
+      return;
+    }
 
     // Register resolver: triggered by POST /proxy/respond
     await new Promise<void>((resolve) => {
       pendingTasks.set(task_id, {
         ...pending,
         resolver: async (artifact, error) => {
-          if (error) {
-            await write({ task_id, status: "failed", error });
-          } else {
-            await write({ task_id, status: "completed", artifact });
+          try {
+            if (error) {
+              await write({ task_id, status: "failed", error });
+            } else {
+              await write({ task_id, status: "completed", artifact });
+            }
+          } catch (err) {
+            console.error(`[ui-proxy] Failed to write result for task ${task_id}:`, err);
+          } finally {
+            pendingTasks.delete(task_id);
+            await writer.close().catch(() => {});
+            resolve();
           }
-          pendingTasks.delete(task_id);
-          await writer.close();
-          resolve();
         },
       });
     });
-  })();
+  })().catch(err => {
+    console.error(`[ui-proxy] Task SSE loop error for ${task_id}:`, err);
+  });
 
   return new Response(readable, {
     headers: {
@@ -212,24 +230,29 @@ app.get("/proxy/tasks", async (c) => {
   browserBacklog.delete(participant_id);
 
   // Send connected event + backlog asynchronously
+  let active = true;
   (async () => {
-    await write({ type: "connected", participant_id });
-    for (const envelope of backlog) {
-      await write(envelope);
-    }
-    // Heartbeat loop — keep connection alive while tab is open (AC7)
-    while (true) {
-      await Bun.sleep(15000);
-      try {
-        await write({ type: "heartbeat" });
-      } catch {
-        break;
+    try {
+      await write({ type: "connected", participant_id });
+      for (const envelope of backlog) {
+        await write(envelope);
       }
+      // Heartbeat loop — keep connection alive while tab is open (AC7)
+      while (active) {
+        await Bun.sleep(15000);
+        if (!active) break;
+        await write({ type: "heartbeat" });
+      }
+    } catch (err) {
+      console.error(`[ui-proxy] Browser SSE error for ${participant_id}:`, err);
     }
-  })();
+  })().catch(err => {
+    console.error(`[ui-proxy] Browser SSE loop error for ${participant_id}:`, err);
+  });
 
   // Clean up on disconnect
   const cleanup = () => {
+    active = false;
     browserListeners.get(participant_id)?.delete(pushFn);
     writer.close().catch(() => {});
   };

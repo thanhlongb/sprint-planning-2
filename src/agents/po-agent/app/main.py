@@ -184,7 +184,7 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
         }
 
     # Simple acknowledgement messages — no session state required.
-    if task.task_type in ("session_ready", "session_aborted", "acknowledge_assignment"):
+    if task.task_type in ("session_ready", "session_aborted", "acknowledge_assignment", "sprint_backlog"):
         return {
             "task_id": task.task_id,
             "status": "completed",

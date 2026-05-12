@@ -33,7 +33,7 @@ interface Props {
   submitted: boolean;
 }
 
-const TOTAL_DOTS = 5;
+const TOTAL_DOTS = 12;
 
 function dotsToVote(dots: number): "HIGH" | "MEDIUM" | "LOW" {
   if (dots >= 2) return "HIGH";
@@ -96,11 +96,10 @@ export default function VoteView({ taskId, sessionCtx, payload, onSubmit, submit
               {Array.from({ length: TOTAL_DOTS }).map((_, i) => (
                 <span
                   key={i}
-                  className={`w-4 h-4 rounded-full border-2 ${
-                    i < remainingDots
-                      ? "bg-primary border-primary"
-                      : "bg-background border-muted"
-                  }`}
+                  className={`w-4 h-4 rounded-full border-2 ${i < remainingDots
+                    ? "bg-primary border-primary"
+                    : "bg-background border-muted"
+                    }`}
                 />
               ))}
             </div>
@@ -142,13 +141,12 @@ export default function VoteView({ taskId, sessionCtx, payload, onSubmit, submit
                         key={i}
                         disabled={submitted}
                         onClick={() => (i < dots ? removeDot(itemId) : addDot(itemId))}
-                        className={`w-5 h-5 rounded-full border-2 transition-all cursor-pointer ${
-                          i < dots
-                            ? "bg-primary border-primary scale-110"
-                            : remainingDots > 0
+                        className={`w-5 h-5 rounded-full border-2 transition-all cursor-pointer ${i < dots
+                          ? "bg-primary border-primary scale-110"
+                          : remainingDots > 0
                             ? "bg-background border-muted hover:border-primary/50"
                             : "bg-background border-muted opacity-40 cursor-not-allowed"
-                        }`}
+                          }`}
                         title={i < dots ? "Click to remove dot" : "Click to add dot"}
                       />
                     ))}

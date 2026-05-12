@@ -28,6 +28,7 @@ interface Props {
     selected_items?: BacklogItem[];
     capacity_plan?: CapacityPlanItem[];
   };
+  myParticipantId?: string;
 }
 
 const priorityVariant: Record<string, "default" | "secondary" | "outline"> = {
@@ -36,10 +37,25 @@ const priorityVariant: Record<string, "default" | "secondary" | "outline"> = {
   LOW: "outline",
 };
 
-export default function SprintBacklogView({ payload }: Props) {
+export default function SprintBacklogView({ payload, myParticipantId }: Props) {
   const { sprint_goal, selected_items = [], capacity_plan = [] } = payload;
 
   const totalSP = capacity_plan.reduce((acc, curr) => acc + (curr.total_story_points || 0), 0);
+
+  // Group items by assignee
+  const groupedItems = selected_items.reduce((acc, item) => {
+    const aid = item.assignee_id || "unassigned";
+    if (!acc[aid]) acc[aid] = [];
+    acc[aid].push(item);
+    return acc;
+  }, {} as Record<string, BacklogItem[]>);
+
+  // Sort assignees: current user first, then others
+  const sortedAssignees = [...capacity_plan].sort((a, b) => {
+    if (a.assignee_id === myParticipantId) return -1;
+    if (b.assignee_id === myParticipantId) return 1;
+    return 0;
+  });
 
   return (
     <div className="space-y-4">
@@ -59,74 +75,84 @@ export default function SprintBacklogView({ payload }: Props) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Capacity Plan</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
-            {capacity_plan.map((cp) => (
-              <div
-                key={cp.assignee_id}
-                className="flex flex-col gap-1 p-3 border rounded-md bg-muted/30"
-              >
-                <span className="font-medium text-sm">{cp.assignee_name || cp.assignee_id}</span>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>{cp.item_count} items</span>
-                  <span>&bull;</span>
-                  <span>{cp.total_story_points} SP</span>
+      <div className="space-y-6">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mt-6">
+          Assignments by Participant
+        </h3>
+
+        {sortedAssignees.map((cp) => {
+          const items = groupedItems[cp.assignee_id] || [];
+          const isMe = cp.assignee_id === myParticipantId;
+
+          return (
+            <div 
+              key={cp.assignee_id} 
+              className={`space-y-3 p-4 rounded-xl border transition-colors ${
+                isMe ? "bg-primary/5 border-primary/20 ring-1 ring-primary/10" : "bg-card"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={`font-semibold ${isMe ? "text-primary" : ""}`}>
+                    {cp.assignee_name || cp.assignee_id}
+                    {isMe && <span className="ml-2 text-xs font-normal opacity-70">(You)</span>}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <Badge variant="outline">{cp.item_count} items</Badge>
+                  <Badge variant="outline">{cp.total_story_points} SP</Badge>
                 </div>
               </div>
-            ))}
-          </div>
-          <div className="mt-4 pt-4 border-t flex justify-between text-sm">
-            <span className="font-medium">Total Assigned:</span>
-            <span className="font-medium">{selected_items.length} items ({totalSP} SP)</span>
-          </div>
-        </CardContent>
-      </Card>
 
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mt-6 mb-2">
-          Final Backlog
-        </h3>
-        {selected_items.length === 0 ? (
-          <Card>
-            <CardContent className="pt-6 text-muted-foreground text-sm">
-              No items selected for this sprint.
-            </CardContent>
-          </Card>
-        ) : (
-          selected_items.map((item) => (
-            <Card key={item.item_id}>
-              <CardHeader className="pb-2">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-sm font-medium">{item.title}</CardTitle>
-                    <p className="text-xs text-muted-foreground mt-1 font-mono">{item.item_id}</p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                    <Badge variant="secondary" className="text-xs font-medium">
-                      {item.assignee_name || item.assignee_id || "Unassigned"}
-                    </Badge>
-                    <div className="flex items-center gap-1.5">
-                      {item.priority && (
-                        <Badge variant={priorityVariant[item.priority] || "outline"} className="text-[10px] uppercase">
-                          {item.priority}
-                        </Badge>
-                      )}
-                      {item.story_points != null && (
-                        <Badge variant="outline" className="text-[10px]">
-                          {item.story_points} SP
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-          ))
+              <div className="grid gap-2">
+                {items.map((item) => (
+                  <Card key={item.item_id} className="shadow-none border-dashed bg-transparent">
+                    <CardHeader className="p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <CardTitle className="text-xs font-medium truncate">{item.title}</CardTitle>
+                          <p className="text-[10px] text-muted-foreground font-mono truncate">{item.item_id}</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {item.priority && (
+                            <Badge variant={priorityVariant[item.priority] || "outline"} className="text-[9px] h-4 px-1 uppercase">
+                              {item.priority}
+                            </Badge>
+                          )}
+                          {item.story_points != null && (
+                            <Badge variant="outline" className="text-[9px] h-4 px-1">
+                              {item.story_points} SP
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </CardHeader>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+
+        {groupedItems["unassigned"]?.length > 0 && (
+          <div className="space-y-3 p-4 rounded-xl border bg-muted/20 border-dashed">
+            <span className="text-sm font-semibold text-muted-foreground italic">Unassigned Items</span>
+            <div className="grid gap-2">
+              {groupedItems["unassigned"].map((item) => (
+                <Card key={item.item_id} className="shadow-none border-dashed bg-transparent opacity-60">
+                  <CardHeader className="p-3">
+                    <CardTitle className="text-xs font-medium">{item.title}</CardTitle>
+                  </CardHeader>
+                </Card>
+              ))}
+            </div>
+          </div>
         )}
+
+        <div className="pt-4 border-t flex justify-between text-sm text-muted-foreground px-2">
+          <span>Total Assigned:</span>
+          <span className="font-medium text-foreground">{selected_items.length} items ({totalSP} SP)</span>
+        </div>
       </div>
     </div>
   );

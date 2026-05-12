@@ -116,7 +116,7 @@ async def receive_task(task: Task, request: Request) -> dict:
         asyncio.create_task(auto_join())
         return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
 
-    if task.task_type in ("session_ready", "session_aborted", "acknowledge_assignment"):
+    if task.task_type in ("session_ready", "session_aborted", "acknowledge_assignment", "sprint_backlog"):
         return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
 
     if task.task_type == "vote":

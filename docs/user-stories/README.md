@@ -30,3 +30,5 @@ Stories are derived from the roadmap in [design-doc.md §14](../design-doc.md). 
 - [US-19: Human-AI User Study](US-19-human-ai-study.md)
 - [US-20: Evaluation Metrics Collection](US-20-metrics-collection.md)
 - [US-21: Research Paper Evaluation Section](US-21-paper-evaluation.md)
+- [US-22: Agent Action Visualization & Animations](US-22-agent-visual-feedback.md)
+- [US-23: Agent Reasoning Transparency (Thought Stream)](US-23-agent-reasoning-transparency.md)

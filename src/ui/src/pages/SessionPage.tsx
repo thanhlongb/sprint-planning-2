@@ -10,6 +10,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { motion, AnimatePresence } from "framer-motion";
+import { ParticipantsSidebar } from "@/components/ParticipantsSidebar";
 import LobbyView from "@/components/LobbyView";
 import ReadyView from "@/components/ReadyView";
 import BacklogView from "@/components/BacklogView";
@@ -36,6 +38,7 @@ export default function SessionPage() {
   const participantId = sessionStorage.getItem(`pid:${session_id}`) ?? "anonymous";
 
   const [tasks, setTasks] = useState<ActiveTask[]>([]);
+  const [participants, setParticipants] = useState<any[]>([]);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState(false);
   const sseRef = useRef<EventSource | null>(null);
@@ -90,6 +93,10 @@ export default function SessionPage() {
           if (prev.some((t) => t.envelope.task_id === envelope.task_id)) return prev;
           return [...prev, { envelope, submitted: false }];
         });
+
+        if (envelope.session_ctx?.participants) {
+          setParticipants(envelope.session_ctx.participants as any[]);
+        }
       } catch {
         // Ignore malformed frames
       }
@@ -190,7 +197,7 @@ export default function SessionPage() {
           />
         );
       case "sprint_backlog":
-        return <SprintBacklogView payload={pl} />;
+        return <SprintBacklogView payload={pl} myParticipantId={participantId} />;
       default:
         return (
           <div className="text-sm text-muted-foreground">
@@ -211,8 +218,9 @@ export default function SessionPage() {
   };
 
   return (
-    <main className="max-w-2xl mx-auto p-8 space-y-6">
-      {/* Header */}
+    <div className="flex max-w-6xl mx-auto items-start gap-8 p-8">
+      <main className="flex-1 space-y-6">
+        {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Sprint Session</h1>
@@ -238,31 +246,51 @@ export default function SessionPage() {
 
       {/* Task stack — newest first */}
       {tasks.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-center py-16 text-muted-foreground"
+        >
           <p>Waiting for the session to begin…</p>
           <p className="text-xs mt-2">Keep this tab open to receive tasks.</p>
-        </div>
+        </motion.div>
       ) : (
         <div className="space-y-8">
-          {[...tasks].reverse().map((active, idx) => (
-            <section key={active.envelope.task_id}>
-              {idx === 0 && (
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                  {phaseLabel[active.envelope.task_type] ?? active.envelope.task_type}
-                </h2>
-              )}
-              {idx > 0 && (
-                <h3 className="text-xs text-muted-foreground mb-3 opacity-60">
-                  ↑ Earlier: {phaseLabel[active.envelope.task_type] ?? active.envelope.task_type}
-                </h3>
-              )}
-              <div className={idx > 0 ? "opacity-50 pointer-events-none" : ""}>
-                {renderTask(active)}
-              </div>
-            </section>
-          ))}
+          <AnimatePresence>
+            {[...tasks].reverse().map((active, idx) => (
+              <motion.section
+                key={active.envelope.task_id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, ease: "easeOut" }}
+              >
+                {idx === 0 && (
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                    {phaseLabel[active.envelope.task_type] ?? active.envelope.task_type}
+                  </h2>
+                )}
+                {idx > 0 && (
+                  <h3 className="text-xs text-muted-foreground mb-3 opacity-60">
+                    ↑ Earlier: {phaseLabel[active.envelope.task_type] ?? active.envelope.task_type}
+                  </h3>
+                )}
+                <div className={idx > 0 ? "opacity-50 pointer-events-none" : ""}>
+                  {renderTask(active)}
+                </div>
+              </motion.section>
+            ))}
+          </AnimatePresence>
         </div>
       )}
-    </main>
+      </main>
+      
+      {participants.length > 0 && (
+        <ParticipantsSidebar 
+          participants={participants} 
+          currentTaskType={tasks.length > 0 ? tasks[tasks.length - 1].envelope.task_type : undefined} 
+          myParticipantId={participantId} 
+        />
+      )}
+    </div>
   );
 }
