@@ -177,7 +177,10 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
         return _handle_confirm(task)
 
     if task.task_type == "human_message":
-        return _handle_human_message(task)
+        return await _handle_human_message(task)
+
+    if task.task_type == "direct_message":
+        return await _handle_direct_message(task)
 
     raise HTTPException(400, f"Unsupported task type: {task.task_type!r}")
 
@@ -224,6 +227,34 @@ async def _auto_join(task: Task) -> None:
             log.info("auto_join session_id=%s status=%d", session_id, resp.status_code)
         except Exception as exc:
             log.warning("auto_join failed session_id=%s exc=%s", session_id, exc)
+            return
+
+    sprint_goal = task.session_ctx.get("sprint_goal", "")
+    intro = (
+        f"Hi team, I'm {AGENT_NAME}, your Product Owner for this session. "
+        f"Our sprint goal is: \"{sprint_goal}\". "
+        "I'll be presenting the backlog shortly — feel free to ask questions as we go."
+    )
+    await _post_agent_message(session_id, own_id, intro)
+
+
+# ── Proactive message helper ──────────────────────────────────────────────────
+
+
+async def _post_agent_message(session_id: str, agent_id: str, content: str) -> None:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            await client.post(
+                f"{PLATFORM_URL}/sessions/{session_id}/message",
+                json={
+                    "sender_id": agent_id,
+                    "sender_name": AGENT_NAME,
+                    "content": content,
+                    "reply_depth": 1,
+                },
+            )
+        except Exception as exc:
+            log.warning("post_agent_message.failed session_id=%s exc=%s", session_id, exc)
 
 
 # ── present_backlog (async SSE) ───────────────────────────────────────────────
@@ -256,6 +287,18 @@ async def _run_present_backlog(task: Task, queue: asyncio.Queue[dict[str, Any]])
             "present_backlog.done session_id=%s task_id=%s items=%d",
             session_id, task.task_id, len(backlog),
         )
+
+        own_id = _own_participant_id(task.session_ctx)
+        if own_id and session_id != "<no-session>":
+            high_count = sum(1 for item in backlog if item.get("priority") == "HIGH")
+            total_sp = sum(item.get("story_points") or 0 for item in backlog)
+            comment = (
+                f"I've prepared {len(backlog)} backlog items ({high_count} high-priority, "
+                f"{total_sp} story points total). Let's vote on priorities — "
+                "feel free to ask me about any item's rationale."
+            )
+            asyncio.create_task(_post_agent_message(session_id, own_id, comment))
+
         await emit("completed", artifact={"backlog": backlog})
 
     except Exception as exc:
@@ -296,21 +339,100 @@ async def _handle_vote(task: Task) -> dict:
         votes = {iid: priority_map.get(iid, "MEDIUM") for iid in items}
 
     log.info("vote.done session_id=%s task_id=%s votes=%s", session_id, task.task_id, votes)
+
+    own_id = _own_participant_id(task.session_ctx)
+    if own_id and session_id != "<no-session>":
+        high_items = [iid for iid, p in votes.items() if p == "HIGH"]
+        if high_items:
+            item_lookup = {item["item_id"]: item for item in backlog_items if "item_id" in item}
+            titles = [item_lookup.get(iid, {}).get("title", iid) for iid in high_items[:3]]
+            comment = (
+                "From a product strategy perspective, the items I'm prioritising HIGH are: "
+                + ", ".join(f'"{t}"' for t in titles)
+                + ("." if len(high_items) <= 3 else f" (and {len(high_items) - 3} more).")
+                + " These best advance our sprint goal."
+            )
+            asyncio.create_task(_post_agent_message(session_id, own_id, comment))
+
     return {"task_id": task.task_id, "status": "completed", "artifact": {"votes": votes}}
 
 
 # ── human_message (sync) ─────────────────────────────────────────────────────
 
 
-def _handle_human_message(task: Task) -> dict:
+async def _handle_human_message(task: Task) -> dict:
     sender_name = task.payload.get("sender_name", "a participant")
     content = task.payload.get("content", "")
     log.info("human_message.received from=%s content=%r", sender_name, content[:120])
+
+    system_prompt = (
+        "You are an experienced Product Owner participating in an agile sprint planning session. "
+        "Reply concisely and in character to the human participant's message. "
+        "Be helpful, strategic, and professional. Keep your reply to 1-2 sentences."
+    )
+    user_prompt = (
+        f"Sprint goal: {task.session_ctx.get('sprint_goal', '')}\n\n"
+        f"{sender_name} says: {content}\n\n"
+        "Reply in character as the Product Owner."
+    )
+
+    reply = f"Thanks {sender_name}, noted."
+    try:
+        reply = await asyncio.wait_for(_llm_call(system_prompt, user_prompt), timeout=8.0)
+    except Exception as exc:
+        log.warning("human_message.llm_failed exc=%s", exc)
+
     return {
         "task_id": task.task_id,
         "status": "completed",
-        "artifact": {"ack": True, "noted": f"Message from {sender_name} received and noted."},
+        "artifact": {"ack": True, "reply": reply},
     }
+
+
+# ── Direct message handler ────────────────────────────────────────────────────
+
+
+async def _handle_direct_message(task: Task) -> dict:
+    sender_name = task.payload.get("sender_name", "a participant")
+    content = task.payload.get("content", "")
+    recent_messages: list[dict] = task.payload.get("recent_messages") or []
+    session_id = task.session_ctx.get("session_id", "<no-session>")
+    log.info("direct_message.received from=%s content=%r", sender_name, content[:120])
+
+    history = "\n".join(
+        f"[{m.get('timestamp', '')[:19]}] {m.get('sender_name', '?')}: {m.get('content', '')}"
+        for m in recent_messages[-10:]
+    )
+    participants = task.session_ctx.get("participants", [])
+    participant_summary = ", ".join(
+        f"{p.get('name')} ({p.get('role')})" for p in participants
+    )
+
+    system_prompt = (
+        "You are an experienced Product Owner in an agile sprint planning session. "
+        "A participant has @mentioned you in the team chat. "
+        "Reply concisely and in character (1-3 sentences). "
+        "Do not @-mention other participants in your reply."
+    )
+    user_prompt = (
+        f"Sprint goal: {task.session_ctx.get('sprint_goal', '')}\n"
+        f"Participants: {participant_summary}\n\n"
+        f"Recent conversation:\n{history or '(none yet)'}\n\n"
+        f"{sender_name} says to you: {content}\n\n"
+        "Reply in character as the Product Owner."
+    )
+
+    reply = f"Thanks {sender_name}, good point."
+    try:
+        reply = await asyncio.wait_for(_llm_call(system_prompt, user_prompt), timeout=9.0)
+    except Exception as exc:
+        log.warning("direct_message.llm_failed exc=%s", exc)
+
+    own_id = _own_participant_id(task.session_ctx)
+    if own_id and session_id != "<no-session>":
+        asyncio.create_task(_post_agent_message(session_id, own_id, reply))
+
+    return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
 
 
 # ── confirm (sync) ────────────────────────────────────────────────────────────

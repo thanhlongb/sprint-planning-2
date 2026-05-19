@@ -166,7 +166,10 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
         return _handle_confirm(task)
 
     if task.task_type == "human_message":
-        return _handle_human_message(task)
+        return await _handle_human_message(task)
+
+    if task.task_type == "direct_message":
+        return await _handle_direct_message(task)
 
     raise HTTPException(400, f"Unsupported task type: {task.task_type!r}")
 
@@ -212,20 +215,115 @@ async def _auto_join(task: Task) -> None:
             log.info("auto_join.ok session_id=%s participant_id=%s", session_id, own_id)
         except Exception as exc:
             log.warning("auto_join.failed session_id=%s exc=%s", session_id, exc)
+            return
+
+    intro = (
+        f"Hi everyone, I'm {AGENT_NAME} — a {PERSONA_SENIORITY} developer "
+        f"specialising in {', '.join(PERSONA_SPECIALTIES)}. "
+        f"I can take up to {MAX_ASSIGNMENTS} items this sprint. Looking forward to planning!"
+    )
+    await _post_agent_message(session_id, own_id, intro)
+
+
+# ── Proactive message helper ──────────────────────────────────────────────────
+
+
+async def _post_agent_message(session_id: str, agent_id: str, content: str) -> None:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            await client.post(
+                f"{PLATFORM_URL}/sessions/{session_id}/message",
+                json={
+                    "sender_id": agent_id,
+                    "sender_name": AGENT_NAME,
+                    "content": content,
+                    "reply_depth": 1,
+                },
+            )
+        except Exception as exc:
+            log.warning("post_agent_message.failed session_id=%s exc=%s", session_id, exc)
 
 
 # ── Human message handler (US-27 AC4) ────────────────────────────────────────
 
 
-def _handle_human_message(task: Task) -> dict:
+async def _handle_human_message(task: Task) -> dict:
     sender_name = task.payload.get("sender_name", "a participant")
     content = task.payload.get("content", "")
     log.info("human_message.received from=%s content=%r", sender_name, content[:120])
+
+    system_prompt = (
+        f"You are a {PERSONA_SENIORITY} software developer with specialties in: "
+        f"{', '.join(PERSONA_SPECIALTIES)}. "
+        "You are participating in an agile sprint planning session. "
+        "Reply concisely and in character to the human participant's message. "
+        "Be helpful and professional. Keep your reply to 1-2 sentences."
+    )
+    user_prompt = (
+        f"Sprint goal: {task.session_ctx.get('sprint_goal', '')}\n\n"
+        f"{sender_name} says: {content}\n\n"
+        "Reply in character as the developer."
+    )
+
+    reply = f"Thanks {sender_name}, noted."
+    try:
+        reply = await asyncio.wait_for(_call_llm(system_prompt, user_prompt), timeout=8.0)
+    except Exception as exc:
+        log.warning("human_message.llm_failed exc=%s", exc)
+
     return {
         "task_id": task.task_id,
         "status": "completed",
-        "artifact": {"ack": True, "noted": f"Message from {sender_name} received and noted."},
+        "artifact": {"ack": True, "reply": reply},
     }
+
+
+# ── Direct message handler ────────────────────────────────────────────────────
+
+
+async def _handle_direct_message(task: Task) -> dict:
+    sender_name = task.payload.get("sender_name", "a participant")
+    content = task.payload.get("content", "")
+    recent_messages: list[dict] = task.payload.get("recent_messages") or []
+    session_id = task.session_ctx.get("session_id", "<no-session>")
+    log.info("direct_message.received from=%s content=%r", sender_name, content[:120])
+
+    history = "\n".join(
+        f"[{m.get('timestamp', '')[:19]}] {m.get('sender_name', '?')}: {m.get('content', '')}"
+        for m in recent_messages[-10:]
+    )
+    participants = task.session_ctx.get("participants", [])
+    participant_summary = ", ".join(
+        f"{p.get('name')} ({p.get('role')})" for p in participants
+    )
+
+    system_prompt = (
+        f"You are a {PERSONA_SENIORITY} software developer specialising in "
+        f"{', '.join(PERSONA_SPECIALTIES)}. "
+        "You are in an agile sprint planning session. "
+        "A participant has @mentioned you in the team chat. "
+        "Reply concisely and in character (1-3 sentences). "
+        "Do not @-mention other participants in your reply."
+    )
+    user_prompt = (
+        f"Sprint goal: {task.session_ctx.get('sprint_goal', '')}\n"
+        f"Participants: {participant_summary}\n\n"
+        f"Recent conversation:\n{history or '(none yet)'}\n\n"
+        f"{sender_name} says to you: {content}\n\n"
+        "Reply in character as the developer."
+    )
+
+    reply = f"Thanks {sender_name}, I'll keep that in mind."
+    try:
+        reply = await asyncio.wait_for(_call_llm(system_prompt, user_prompt), timeout=9.0)
+    except Exception as exc:
+        log.warning("direct_message.llm_failed exc=%s", exc)
+
+    own_id = _own_participant_id(task.session_ctx)
+    if own_id and session_id != "<no-session>":
+        asyncio.create_task(_post_agent_message(session_id, own_id, reply))
+
+    return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
 
 
 # ── Confirm handler ───────────────────────────────────────────────────────────
@@ -329,6 +427,22 @@ async def _run_vote(task: Task, queue: asyncio.Queue[dict[str, Any]]) -> None:
             votes[item_id] = declared if declared in ("HIGH", "MEDIUM", "LOW") else "MEDIUM"
 
     log.info("vote.completed task_id=%s session_id=%s votes=%s", task.task_id, session_id, votes)
+
+    own_id = _own_participant_id(task.session_ctx)
+    if own_id and session_id != "<no-session>":
+        high_items = [iid for iid, p in votes.items() if p == "HIGH"]
+        if high_items:
+            item_titles = [
+                item_map.get(iid, {}).get("title", iid) for iid in high_items[:3]
+            ]
+            comment = (
+                f"I've cast my votes. From my perspective as a {PERSONA_SENIORITY} "
+                f"{'/'.join(PERSONA_SPECIALTIES)} dev, the highest-priority items are: "
+                + ", ".join(f'"{t}"' for t in item_titles)
+                + ("." if len(high_items) <= 3 else f" (and {len(high_items) - 3} more).")
+            )
+            asyncio.create_task(_post_agent_message(session_id, own_id, comment))
+
     await queue.put({
         "task_id": task.task_id,
         "status": "completed",
@@ -462,6 +576,15 @@ async def _run_assign_opportunity(task: Task, queue: asyncio.Queue[dict[str, Any
         "assign_opportunity.completed task_id=%s session_id=%s item_id=%s volunteer=%s",
         task.task_id, session_id, item_id, volunteer,
     )
+
+    own_id = _own_participant_id(task.session_ctx)
+    if own_id and session_id != "<no-session>":
+        if volunteer:
+            comment = f"I'd like to take \"{item_title}\" — {reason}"
+        else:
+            comment = f"I'll pass on \"{item_title}\" — {reason}"
+        asyncio.create_task(_post_agent_message(session_id, own_id, comment))
+
     await queue.put({
         "task_id": task.task_id,
         "status": "completed",

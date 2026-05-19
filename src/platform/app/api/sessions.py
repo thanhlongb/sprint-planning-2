@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 from uuid import uuid4
@@ -34,6 +35,13 @@ from app.session_service import (
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_MENTION_RE = re.compile(r'@([\w][\w-]*)')
+
+
+def _parse_mentions(content: str) -> set[str]:
+    """Return lowercased name tokens found after @ in content."""
+    return {m.lower() for m in _MENTION_RE.findall(content)}
 
 # ── Request / response models ─────────────────────────────────────────────────
 
@@ -509,13 +517,27 @@ async def send_human_message(
             ))
 
         try:
-            await a2a.send_task(
+            result = await a2a.send_task(
                 endpoint=slot.endpoint,
                 task_type="human_message",
                 session_ctx=session_ctx,
                 payload={"content": body.content, "sender_name": body.sender_name},
                 on_progress=_on_thought,
             )
+            reply = (result.artifact or {}).get("reply")
+            if reply:
+                await publish_comm_event(CommEvent(
+                    comm_id=str(uuid4()),
+                    session_id=session_id,
+                    timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                    sender_id=receiver_id,
+                    sender_name=slot.name,
+                    receiver_id=body.sender_id,
+                    receiver_name=body.sender_name,
+                    task_type="human_message",
+                    message_kind="agent_reply",
+                    content=reply,
+                ))
         except Exception as exc:
             log.warning("human_message.agent_dispatch_failed slot=%s exc=%s", slot.id, exc)
 
@@ -525,6 +547,178 @@ async def send_human_message(
         )
 
     return {"ok": True, "dispatched_to": len(target_slots)}
+
+
+# ── POST /sessions/{session_id}/agent-message — proactive agent chat ─────────
+
+
+class AgentMessageRequest(BaseModel):
+    agent_id: str       # participant_id of the calling agent
+    agent_name: str
+    content: str
+    target: str = "all"  # "all" or a specific participant_id
+
+
+@router.post("/{session_id}/agent-message")
+async def send_agent_message(
+    session_id: str,
+    body: AgentMessageRequest,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    result = await db.execute(select(Session).where(Session.id == session_id))
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(404, detail={"reason": "session_not_found"})
+    if session.status not in ("ACTIVE", "PENDING"):
+        raise HTTPException(409, detail={"reason": "session_not_active", "status": session.status})
+
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session_id,
+        timestamp=timestamp,
+        sender_id=body.agent_id,
+        sender_name=body.agent_name,
+        receiver_id=body.target if body.target != "all" else None,
+        receiver_name=None,
+        task_type="agent_chat",
+        message_kind="agent_chat",
+        content=body.content,
+    ))
+
+    log.info(
+        "agent_message.published session_id=%s agent=%s target=%s",
+        session_id, body.agent_name, body.target,
+    )
+    return {"ok": True}
+
+
+# ── POST /sessions/{session_id}/message — unified peer-to-peer chat ──────────
+
+
+class MessageRequest(BaseModel):
+    sender_id: str
+    sender_name: str
+    content: str
+    reply_depth: int = 0   # 0 = original; 1 = agent reply; platform skips dispatch at depth ≥ 1
+    target: str = "all"    # "all" or a specific participant_id
+
+
+@router.post("/{session_id}/message")
+async def send_message(
+    session_id: str,
+    body: MessageRequest,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    from app.a2a.client import A2AClient
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    result = await db.execute(select(Session).where(Session.id == session_id))
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(404, detail={"reason": "session_not_found"})
+    if session.status not in ("ACTIVE", "PENDING"):
+        raise HTTPException(409, detail={"reason": "session_not_active", "status": session.status})
+
+    slots_result = await db.execute(
+        select(SessionParticipant).where(SessionParticipant.session_id == session_id)
+    )
+    slots = list(slots_result.scalars())
+
+    # ── Persist (trimmed to 50 most recent) ────────────────────────────────────
+    ctx = dict(session.context or {})
+    messages: list[dict[str, Any]] = list(ctx.get("messages", []))
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+    messages.append({
+        "sender_id": body.sender_id,
+        "sender_name": body.sender_name,
+        "content": body.content,
+        "reply_depth": body.reply_depth,
+        "timestamp": timestamp,
+    })
+    if len(messages) > 50:
+        messages = messages[-50:]
+    ctx["messages"] = messages
+    session.context = ctx
+    await db.commit()
+
+    # ── Publish to comm feed (all subscribers see every message) ───────────────
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session_id,
+        timestamp=timestamp,
+        sender_id=body.sender_id,
+        sender_name=body.sender_name,
+        receiver_id=body.target if body.target != "all" else None,
+        receiver_name=None,
+        task_type="direct_message",
+        message_kind="chat",
+        content=body.content,
+    ))
+
+    log.info(
+        "message.published session_id=%s sender=%s depth=%d len=%d",
+        session_id, body.sender_name, body.reply_depth, len(body.content),
+    )
+
+    # ── Route to mentioned agents (depth-0 only to prevent loops) ─────────────
+    dispatched = 0
+    if body.reply_depth == 0:
+        mentioned = _parse_mentions(body.content)
+        target_slots = [
+            s for s in slots
+            if s.slot_type == "AGENT"
+            and s.status == "joined"
+            and s.endpoint
+            and s.participant_id != body.sender_id
+            and s.name.lower() in mentioned
+        ]
+
+        if target_slots:
+            session_ctx: dict[str, Any] = {
+                "session_id": session_id,
+                "sprint_goal": session.sprint_goal,
+                "participants": [
+                    {
+                        "participant_id": s.participant_id,
+                        "name": s.name,
+                        "role": s.role,
+                        "type": "AI_AGENT" if s.slot_type == "AGENT" else "HUMAN",
+                    }
+                    for s in slots
+                ],
+                "messages": messages,
+            }
+            a2a = A2AClient(default_timeout_seconds=12.0)
+
+            async def _dispatch(slot: SessionParticipant) -> None:
+                try:
+                    await a2a.send_task(
+                        endpoint=slot.endpoint,
+                        task_type="direct_message",
+                        session_ctx=session_ctx,
+                        payload={
+                            "content": body.content,
+                            "sender_id": body.sender_id,
+                            "sender_name": body.sender_name,
+                            "reply_depth": body.reply_depth,
+                            "recent_messages": messages[-10:],
+                        },
+                    )
+                except Exception as exc:
+                    log.warning("message.dispatch_failed slot=%s exc=%s", slot.id, exc)
+
+            asyncio.create_task(
+                asyncio.gather(*[_dispatch(s) for s in target_slots], return_exceptions=True)
+            )
+            dispatched = len(target_slots)
+
+    return {"ok": True, "dispatched_to": dispatched}
 
 
 # ── GET /sessions/{session_id}/comm-feed — US-26 communication feed SSE ───────
