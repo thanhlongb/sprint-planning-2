@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 from uuid import uuid4
@@ -29,6 +30,8 @@ from app.session_service import (
     schedule_timeout,
     send_invites_background,
 )
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -393,6 +396,135 @@ async def list_sessions(db: AsyncSession = Depends(get_session)) -> list[Session
         )
         for s in result.scalars()
     ]
+
+
+# ── POST /sessions/{session_id}/human-message — US-27 human chat ─────────────
+
+
+class HumanMessageRequest(BaseModel):
+    sender_id: str
+    sender_name: str
+    content: str
+    target: str = "all"  # "all" or a specific participant_id
+
+
+@router.post("/{session_id}/human-message")
+async def send_human_message(
+    session_id: str,
+    body: HumanMessageRequest,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    from app.a2a.client import A2AClient
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    result = await db.execute(select(Session).where(Session.id == session_id))
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(404, detail={"reason": "session_not_found"})
+    if session.status != "ACTIVE":
+        raise HTTPException(409, detail={"reason": "session_not_active", "status": session.status})
+
+    slots_result = await db.execute(
+        select(SessionParticipant).where(SessionParticipant.session_id == session_id)
+    )
+    slots = list(slots_result.scalars())
+
+    # Persist message into session context (AC8 audit trail via DB)
+    ctx = dict(session.context or {})
+    messages: list[dict[str, Any]] = list(ctx.get("human_messages", []))
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+    message_entry: dict[str, Any] = {
+        "sender_id": body.sender_id,
+        "sender_name": body.sender_name,
+        "content": body.content,
+        "target": body.target,
+        "timestamp": timestamp,
+    }
+    messages.append(message_entry)
+    ctx["human_messages"] = messages
+    session.context = ctx
+    await db.commit()
+
+    # Publish to comm feed so all watchers see the human message immediately
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session_id,
+        timestamp=timestamp,
+        sender_id=body.sender_id,
+        sender_name=body.sender_name,
+        receiver_id=body.target if body.target != "all" else None,
+        receiver_name=None,
+        task_type="human_message",
+        message_kind="human_message",
+        content=body.content,
+    ))
+
+    log.info(
+        "human_message.received session_id=%s sender=%s target=%s content_len=%d",
+        session_id, body.sender_name, body.target, len(body.content),
+    )
+
+    # Identify target agent slots
+    target_slots = [
+        s for s in slots
+        if s.slot_type == "AGENT"
+        and s.status == "joined"
+        and s.endpoint
+        and (body.target == "all" or s.participant_id == body.target)
+    ]
+
+    session_ctx: dict[str, Any] = {
+        "session_id": session_id,
+        "sprint_goal": session.sprint_goal,
+        "human_messages": messages,
+        "participants": [
+            {
+                "participant_id": s.participant_id,
+                "name": s.name,
+                "role": s.role,
+                "type": "AI_AGENT" if s.slot_type == "AGENT" else "HUMAN",
+            }
+            for s in slots
+        ],
+    }
+
+    a2a = A2AClient(default_timeout_seconds=10.0)
+
+    async def _dispatch_to_agent(slot: SessionParticipant) -> None:
+        receiver_id = slot.participant_id or slot.id
+
+        async def _on_thought(thought: str) -> None:
+            await publish_comm_event(CommEvent(
+                comm_id=str(uuid4()),
+                session_id=session_id,
+                timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                sender_id=receiver_id,
+                sender_name=slot.name,
+                receiver_id=None,
+                receiver_name=None,
+                task_type="human_message",
+                message_kind="thought",
+                content=thought,
+            ))
+
+        try:
+            await a2a.send_task(
+                endpoint=slot.endpoint,
+                task_type="human_message",
+                session_ctx=session_ctx,
+                payload={"content": body.content, "sender_name": body.sender_name},
+                on_progress=_on_thought,
+            )
+        except Exception as exc:
+            log.warning("human_message.agent_dispatch_failed slot=%s exc=%s", slot.id, exc)
+
+    if target_slots:
+        asyncio.create_task(
+            asyncio.gather(*[_dispatch_to_agent(s) for s in target_slots], return_exceptions=True)
+        )
+
+    return {"ok": True, "dispatched_to": len(target_slots)}
 
 
 # ── GET /sessions/{session_id}/comm-feed — US-26 communication feed SSE ───────

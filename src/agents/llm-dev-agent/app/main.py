@@ -165,6 +165,9 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
     if task.task_type == "confirm":
         return _handle_confirm(task)
 
+    if task.task_type == "human_message":
+        return _handle_human_message(task)
+
     raise HTTPException(400, f"Unsupported task type: {task.task_type!r}")
 
 
@@ -211,6 +214,20 @@ async def _auto_join(task: Task) -> None:
             log.warning("auto_join.failed session_id=%s exc=%s", session_id, exc)
 
 
+# ── Human message handler (US-27 AC4) ────────────────────────────────────────
+
+
+def _handle_human_message(task: Task) -> dict:
+    sender_name = task.payload.get("sender_name", "a participant")
+    content = task.payload.get("content", "")
+    log.info("human_message.received from=%s content=%r", sender_name, content[:120])
+    return {
+        "task_id": task.task_id,
+        "status": "completed",
+        "artifact": {"ack": True, "noted": f"Message from {sender_name} received and noted."},
+    }
+
+
 # ── Confirm handler ───────────────────────────────────────────────────────────
 
 
@@ -232,6 +249,7 @@ async def _run_vote(task: Task, queue: asyncio.Queue[dict[str, Any]]) -> None:
     items: list[str] = task.payload.get("items", [])
     backlog_items: list[dict] = task.session_ctx.get("backlog_items") or []
     sprint_goal: str = task.session_ctx.get("sprint_goal", "")
+    human_messages: list[dict] = task.session_ctx.get("human_messages") or []
 
     await queue.put({
         "task_id": task.task_id,
@@ -269,6 +287,13 @@ async def _run_vote(task: Task, queue: asyncio.Queue[dict[str, Any]]) -> None:
         "Favour items that match my specialties or are critical blockers.\n"
         "Output ONLY valid JSON mapping item_id to priority."
     )
+
+    if human_messages:
+        notes = "\n".join(
+            f"- {m.get('sender_name', 'participant')}: {m.get('content', '')}"
+            for m in human_messages[-5:]
+        )
+        user_prompt += f"\n\nAdditional context from session participants:\n{notes}"
 
     await queue.put({
         "task_id": task.task_id,
@@ -322,6 +347,7 @@ async def _run_assign_opportunity(task: Task, queue: asyncio.Queue[dict[str, Any
     current_assignments = _count_own_assignments(task.session_ctx)
     backlog_items: list[dict] = task.session_ctx.get("backlog_items") or []
     sprint_goal: str = task.session_ctx.get("sprint_goal", "")
+    human_messages: list[dict] = task.session_ctx.get("human_messages") or []
 
     await queue.put({
         "task_id": task.task_id,
@@ -388,6 +414,13 @@ async def _run_assign_opportunity(task: Task, queue: asyncio.Queue[dict[str, Any
         f"My specialties: {', '.join(PERSONA_SPECIALTIES)}\n\n"
         'Should I volunteer? Output ONLY valid JSON: {"volunteer": true|false, "reason": "..."}'
     )
+
+    if human_messages:
+        notes = "\n".join(
+            f"- {m.get('sender_name', 'participant')}: {m.get('content', '')}"
+            for m in human_messages[-5:]
+        )
+        user_prompt += f"\n\nAdditional context from session participants:\n{notes}"
 
     await queue.put({
         "task_id": task.task_id,

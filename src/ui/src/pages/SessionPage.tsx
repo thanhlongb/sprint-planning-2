@@ -294,7 +294,13 @@ export default function SessionPage() {
           />
         )}
         {session_id && (
-          <CommunicationFeed sessionId={session_id} participants={participants} />
+          <CommunicationFeed
+            sessionId={session_id}
+            participants={participants}
+            myParticipantId={participantId !== "anonymous" ? participantId : undefined}
+            myName={sessionStorage.getItem(`name:${session_id}`) ?? undefined}
+            currentTaskType={tasks.length > 0 ? tasks[tasks.length - 1].envelope.task_type : undefined}
+          />
         )}
       </div>
     </div>

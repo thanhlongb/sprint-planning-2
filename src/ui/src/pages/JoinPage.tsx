@@ -94,8 +94,9 @@ export default function JoinPage() {
         setError(data.detail?.reason ?? data.error ?? "Join failed");
         return;
       }
-      // Store participant_id for this session
+      // Store participant_id and name for this session
       sessionStorage.setItem(`pid:${session_id}`, data.participant_id);
+      sessionStorage.setItem(`name:${session_id}`, selectedName);
       navigate(`/session/${session_id}`);
     } catch {
       setError("Network error — could not join session");

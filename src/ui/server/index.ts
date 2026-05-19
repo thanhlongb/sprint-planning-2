@@ -285,6 +285,34 @@ app.post("/proxy/respond", async (c) => {
   return c.json({ ok: true, task_id });
 });
 
+// ── POST /proxy/human-message — relay US-27 human chat message to platform ────
+
+app.post("/proxy/human-message", async (c) => {
+  const body = await c.req.json<{
+    session_id: string;
+    sender_id: string;
+    sender_name: string;
+    content: string;
+    target?: string;
+  }>();
+
+  const { session_id, ...rest } = body;
+  try {
+    const resp = await fetch(
+      `${PLATFORM_URL}/sessions/${session_id}/human-message`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rest),
+      }
+    );
+    const data = await resp.json();
+    return c.json(data, resp.status as any);
+  } catch {
+    return c.json({ error: "platform unreachable" }, 502);
+  }
+});
+
 // ── GET /proxy/comm-feed — relay US-26 comm-feed SSE from platform ────────────
 
 app.get("/proxy/comm-feed", async (c) => {

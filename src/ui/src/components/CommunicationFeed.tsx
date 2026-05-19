@@ -1,13 +1,15 @@
 /**
- * US-26: Agent Communication & Chat UI
+ * US-26 / US-27: Agent Communication Feed + Human Chat
  *
  * Displays a real-time feed of A2A messages exchanged between agents during
  * a sprint planning session.  Connects to GET /proxy/comm-feed?session_id=…
- * via SSE and renders task_request, task_response, and thought events.
+ * via SSE and renders task_request, task_response, thought, and human_message events.
+ * US-27 adds a message composer for human participants to send freeform messages to agents.
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,7 +23,7 @@ export interface CommEvent {
   receiver_id: string | null;
   receiver_name: string | null;
   task_type: string;
-  message_kind: "task_request" | "task_response" | "thought";
+  message_kind: "task_request" | "task_response" | "thought" | "human_message";
   content: Record<string, unknown> | string;
 }
 
@@ -35,6 +37,9 @@ interface Participant {
 interface Props {
   sessionId: string;
   participants: Participant[];
+  myParticipantId?: string;
+  myName?: string;
+  currentTaskType?: string;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -59,7 +64,17 @@ const KIND_LABELS: Record<string, string> = {
   task_request:  "Request",
   task_response: "Response",
   thought:       "Thought",
+  human_message: "Message",
 };
+
+// Phases in which the composer is enabled (AC7)
+const ACTIVE_PHASES = new Set([
+  "session_ready",
+  "present_backlog",
+  "vote",
+  "assign_opportunity",
+  "confirm",
+]);
 
 const TASK_TYPE_LABELS: Record<string, string> = {
   present_backlog:      "Present Backlog",
@@ -79,9 +94,14 @@ function getRoleForName(name: string, participants: Participant[]): string {
 
 function summariseContent(
   taskType: string,
-  kind: "task_request" | "task_response" | "thought",
+  kind: "task_request" | "task_response" | "thought" | "human_message",
   content: Record<string, unknown> | string,
 ): string {
+  if (kind === "human_message") {
+    if (typeof content === "string") return content;
+    const c = content as Record<string, unknown>;
+    return typeof c.content === "string" ? c.content : JSON.stringify(c);
+  }
   if (kind === "thought") {
     return typeof content === "string" ? content : JSON.stringify(content);
   }
@@ -139,13 +159,26 @@ function formatTime(iso: string): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function CommunicationFeed({ sessionId, participants }: Props) {
+export function CommunicationFeed({
+  sessionId,
+  participants,
+  myParticipantId,
+  myName,
+  currentTaskType,
+}: Props) {
   const [events, setEvents] = useState<CommEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [filterAgent, setFilterAgent] = useState<string>("all");
   const [filterKind, setFilterKind] = useState<string>("all");
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const [isOpen, setIsOpen] = useState(true);
+
+  // Composer state (US-27)
+  const [composerText, setComposerText] = useState("");
+  const [composerTarget, setComposerTarget] = useState<string>("all");
+  const [isSending, setIsSending] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const processingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -162,6 +195,85 @@ export function CommunicationFeed({ sessionId, participants }: Props) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     setHasNewMessages(false);
   }, []);
+
+  // Clear processing indicator when an agent replies with a thought for human_message (US-27)
+  useEffect(() => {
+    if (!isProcessing) return;
+    const lastEvent = events[events.length - 1];
+    if (lastEvent?.task_type === "human_message" && lastEvent?.message_kind === "thought") {
+      if (processingTimerRef.current) clearTimeout(processingTimerRef.current);
+      setIsProcessing(false);
+    }
+  }, [events, isProcessing]);
+
+  // Cleanup processing timer on unmount
+  useEffect(() => {
+    return () => {
+      if (processingTimerRef.current) clearTimeout(processingTimerRef.current);
+    };
+  }, []);
+
+  // Send human message (US-27)
+  const handleSend = useCallback(async () => {
+    const text = composerText.trim();
+    if (!text || !myParticipantId || !myName || isSending) return;
+
+    setIsSending(true);
+
+    // Optimistic insert
+    const optimisticEvent: CommEvent = {
+      event_type: "comm_event",
+      comm_id: `optimistic-${Date.now()}`,
+      session_id: sessionId,
+      timestamp: new Date().toISOString(),
+      sender_id: myParticipantId,
+      sender_name: myName,
+      receiver_id: composerTarget === "all" ? null : composerTarget,
+      receiver_name: composerTarget === "all" ? null : composerTarget,
+      task_type: "human_message",
+      message_kind: "human_message",
+      content: text,
+    };
+    setEvents((prev) => [...prev, optimisticEvent]);
+    setComposerText("");
+
+    try {
+      await fetch("/proxy/human-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          sender_id: myParticipantId,
+          sender_name: myName,
+          content: text,
+          target: composerTarget,
+        }),
+      });
+
+      // Show processing indicator for up to 10s
+      setIsProcessing(true);
+      processingTimerRef.current = setTimeout(() => setIsProcessing(false), 10000);
+    } catch {
+      // Silently fail — optimistic message already shown
+    } finally {
+      setIsSending(false);
+    }
+  }, [composerText, composerTarget, myParticipantId, myName, isSending, sessionId]);
+
+  const composerEnabled =
+    !!myParticipantId &&
+    !!myName &&
+    !!currentTaskType &&
+    ACTIVE_PHASES.has(currentTaskType);
+
+  // Derive AI agent names for composer target selector
+  const aiAgentNames = Array.from(
+    new Set(
+      participants
+        .filter((p) => p.type === "AI_AGENT")
+        .map((p) => p.name)
+    )
+  );
 
   // SSE connection
   useEffect(() => {
@@ -250,8 +362,8 @@ export function CommunicationFeed({ sessionId, participants }: Props) {
                 <option key={name} value={name}>{name}</option>
               ))}
             </select>
-            <div className="flex gap-1">
-              {(["all", "task_request", "task_response", "thought"] as const).map((k) => (
+            <div className="flex gap-1 flex-wrap">
+              {(["all", "task_request", "task_response", "thought", "human_message"] as const).map((k) => (
                 <button
                   key={k}
                   onClick={() => setFilterKind(k)}
@@ -301,6 +413,55 @@ export function CommunicationFeed({ sessionId, participants }: Props) {
               </button>
             )}
           </div>
+
+          {/* Message composer (US-27) */}
+          <div className={`border-t px-3 py-2 space-y-1.5 ${!composerEnabled ? "opacity-50" : ""}`}>
+            {isProcessing && (
+              <p className="text-[10px] text-muted-foreground animate-pulse">
+                Agents are processing your message…
+              </p>
+            )}
+            <div className="flex gap-1.5">
+              <select
+                value={composerTarget}
+                onChange={(e) => setComposerTarget(e.target.value)}
+                disabled={!composerEnabled}
+                className="text-xs rounded border border-border bg-background px-1.5 py-0.5 text-foreground shrink-0"
+              >
+                <option value="all">All</option>
+                {aiAgentNames.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={composerText}
+                onChange={(e) => setComposerText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && composerEnabled) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                disabled={!composerEnabled}
+                placeholder={
+                  composerEnabled
+                    ? "Message agents… (Enter to send)"
+                    : "Chat available during active phases"
+                }
+                className="flex-1 min-w-0 text-xs rounded border border-border bg-background px-2 py-1 text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed"
+              />
+              <Button
+                size="sm"
+                variant="default"
+                disabled={!composerEnabled || !composerText.trim() || isSending}
+                onClick={handleSend}
+                className="text-xs h-7 px-2 shrink-0"
+              >
+                {isSending ? "…" : "Send"}
+              </Button>
+            </div>
+          </div>
         </>
       )}
     </div>
@@ -318,10 +479,37 @@ function CommMessage({
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  const isHumanMessage = event.message_kind === "human_message";
+  const isThought = event.message_kind === "thought";
+
+  // Human messages render right-aligned in a distinct style
+  if (isHumanMessage) {
+    const summary = summariseContent(event.task_type, event.message_kind, event.content);
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
+        className="flex flex-col items-end gap-0.5"
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] text-muted-foreground">{formatTime(event.timestamp)}</span>
+          <Badge variant="secondary" className="text-[9px] h-3.5 px-1 py-0">You</Badge>
+          <span className="text-[11px] font-semibold text-foreground">{event.sender_name}</span>
+        </div>
+        <div className="bg-primary/10 border border-primary/20 rounded-lg px-2.5 py-1.5 max-w-[85%]">
+          <p className="text-xs text-foreground leading-snug break-words">{summary}</p>
+        </div>
+        {event.receiver_name && (
+          <span className="text-[9px] text-muted-foreground">→ {event.receiver_name}</span>
+        )}
+      </motion.div>
+    );
+  }
+
   const role = getRoleForName(event.sender_name, participants);
   const colorClass = ROLE_COLORS[role] ?? ROLE_COLORS.platform;
   const avatarBg = AVATAR_BG[role] ?? AVATAR_BG.platform;
-  const isThought = event.message_kind === "thought";
   const summary = summariseContent(event.task_type, event.message_kind, event.content);
   const TRUNCATE_AT = 160;
   const shouldTruncate = isThought && summary.length > TRUNCATE_AT;

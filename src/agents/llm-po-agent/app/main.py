@@ -176,6 +176,9 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
     if task.task_type == "confirm":
         return _handle_confirm(task)
 
+    if task.task_type == "human_message":
+        return _handle_human_message(task)
+
     raise HTTPException(400, f"Unsupported task type: {task.task_type!r}")
 
 
@@ -272,12 +275,13 @@ async def _handle_vote(task: Task) -> dict:
     sprint_goal = task.session_ctx.get("sprint_goal", "")
     items: list[str] = task.payload.get("items", [])
     backlog_items: list[dict] = task.session_ctx.get("backlog_items") or []
+    human_messages: list[dict] = task.session_ctx.get("human_messages") or []
 
     if not items:
         return {"task_id": task.task_id, "status": "completed", "artifact": {"votes": {}}}
 
     try:
-        raw_json = await _llm_vote(sprint_goal, items, backlog_items, session_id, task.task_id)
+        raw_json = await _llm_vote(sprint_goal, items, backlog_items, human_messages, session_id, task.task_id)
         votes = _parse_and_validate_votes(raw_json, items)
     except Exception as exc:
         log.warning(
@@ -293,6 +297,20 @@ async def _handle_vote(task: Task) -> dict:
 
     log.info("vote.done session_id=%s task_id=%s votes=%s", session_id, task.task_id, votes)
     return {"task_id": task.task_id, "status": "completed", "artifact": {"votes": votes}}
+
+
+# ── human_message (sync) ─────────────────────────────────────────────────────
+
+
+def _handle_human_message(task: Task) -> dict:
+    sender_name = task.payload.get("sender_name", "a participant")
+    content = task.payload.get("content", "")
+    log.info("human_message.received from=%s content=%r", sender_name, content[:120])
+    return {
+        "task_id": task.task_id,
+        "status": "completed",
+        "artifact": {"ack": True, "noted": f"Message from {sender_name} received and noted."},
+    }
 
 
 # ── confirm (sync) ────────────────────────────────────────────────────────────
@@ -360,6 +378,7 @@ async def _llm_vote(
     sprint_goal: str,
     item_ids: list[str],
     backlog_items: list[dict],
+    human_messages: list[dict],
     session_id: str,
     task_id: str,
 ) -> str:
@@ -379,6 +398,13 @@ async def _llm_vote(
         f"Backlog items to evaluate:\n" + "\n".join(item_summaries) + "\n\n"
         "Return a JSON object mapping each item_id to HIGH, MEDIUM, or LOW. Output only JSON."
     )
+
+    if human_messages:
+        notes = "\n".join(
+            f"- {m.get('sender_name', 'participant')}: {m.get('content', '')}"
+            for m in human_messages[-5:]
+        )
+        user_message += f"\n\nAdditional context from session participants:\n{notes}"
     log.info(
         "llm.vote.call provider=%s session_id=%s task_id=%s items=%d",
         LLM_PROVIDER, session_id, task_id, len(item_ids),

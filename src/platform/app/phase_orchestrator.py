@@ -172,6 +172,7 @@ def _build_ctx(
     selected_items: list[str] | None,
     assignments: dict[str, str],
     phase_history: list[dict],
+    human_messages: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Construct the full session_ctx payload (AC5)."""
     return {
@@ -192,6 +193,7 @@ def _build_ctx(
         "selected_items": selected_items,
         "assignments": assignments,
         "phase_history": phase_history,
+        "human_messages": human_messages or [],
     }
 
 
@@ -204,6 +206,16 @@ async def _commit_ctx(session_id: str, updates: dict[str, Any]) -> None:
         ctx.update(updates)
         row.context = ctx
         await db.commit()
+
+
+async def _refresh_human_messages(session_id: str) -> list[dict]:
+    """Re-read human_messages from DB so agents see messages sent since last action."""
+    async with SessionLocal() as db:
+        result = await db.execute(select(Session).where(Session.id == session_id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return []
+        return (row.context or {}).get("human_messages", [])
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -276,20 +288,23 @@ async def _orchestrate(session_id: str) -> None:
             action_type = action.get("type")
             log.info("orchestrator.action.start session_id=%s phase_id=%s action=%s", session_id, phase_id, action_type)
 
+            # Refresh human messages from DB before each task dispatch (US-27 AC4)
+            human_messages: list[dict] = await _refresh_human_messages(session_id)
+
             if action_type == "PRESENT_ITEMS":
-                backlog_items = await _handle_present_items(session, slots, phase_id, phase_name, assignments, phase_history)
+                backlog_items = await _handle_present_items(session, slots, phase_id, phase_name, assignments, phase_history, human_messages)
                 outcome = f"{len(backlog_items)} items received"
             elif action_type == "VOTE":
-                vote_scores = await _handle_vote(session, slots, backlog_items or [], phase_id, phase_name, assignments, phase_history)
+                vote_scores = await _handle_vote(session, slots, backlog_items or [], phase_id, phase_name, assignments, phase_history, human_messages)
                 action_context["vote_scores"] = vote_scores
             elif action_type == "SELECT":
                 selected_items = await _handle_select(session, backlog_items or [], action_context.get("vote_scores", {}))
                 outcome = f"{len(selected_items)} items selected"
             elif action_type == "ASSIGN":
-                assignments = await _handle_assign(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history)
+                assignments = await _handle_assign(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history, human_messages)
                 outcome = f"{len(assignments)} items assigned"
             elif action_type == "CONFIRM":
-                quorum = await _handle_confirm(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history)
+                quorum = await _handle_confirm(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history, human_messages)
                 outcome = f"quorum {quorum:.0%}"
 
         phase_history.append({
@@ -440,6 +455,7 @@ async def _handle_present_items(
     phase_name: str,
     assignments: dict[str, str],
     phase_history: list[dict],
+    human_messages: list[dict] | None = None,
 ) -> list[dict]:
     po_slots = _reachable_slots(slots, roles={"PRODUCT_OWNER"})
     if not po_slots:
@@ -447,7 +463,7 @@ async def _handle_present_items(
 
     ctx = _build_ctx(
         session, slots, phase_id, phase_name, 1,
-        None, None, assignments, phase_history,
+        None, None, assignments, phase_history, human_messages,
     )
     po = po_slots[0]
     result = await _send_task_with_comm(
@@ -483,13 +499,14 @@ async def _handle_vote(
     phase_name: str,
     assignments: dict[str, str],
     phase_history: list[dict],
+    human_messages: list[dict] | None = None,
 ) -> dict[str, int]:
     all_reachable = _reachable_slots(slots)
     item_ids = [item["item_id"] for item in backlog_items]
 
     ctx = _build_ctx(
         session, slots, phase_id, phase_name, 1,
-        backlog_items, None, assignments, phase_history,
+        backlog_items, None, assignments, phase_history, human_messages,
     )
 
     async def get_votes(slot: _SlotSnap) -> dict[str, str]:
@@ -550,6 +567,7 @@ async def _handle_assign(
     phase_id: str,
     phase_name: str,
     phase_history: list[dict],
+    human_messages: list[dict] | None = None,
 ) -> dict[str, str]:
     assignments = dict(initial_assignments)
     eligible = _reachable_slots(slots, roles={"DEVELOPER", "ARCHITECT"})
@@ -564,14 +582,14 @@ async def _handle_assign(
     for item_id in selected_items:
         item = item_lookup.get(item_id, {"item_id": item_id, "title": item_id, "description": ""})
         assignee_id, reason = await _assign_item(
-            session, slots, eligible, backlog_items, selected_items, item, assignments, phase_id, phase_name, phase_history
+            session, slots, eligible, backlog_items, selected_items, item, assignments, phase_id, phase_name, phase_history, human_messages
         )
         if assignee_id:
             assignments[item_id] = assignee_id
             await _broadcast_acknowledge(
                 session, slots, all_reachable,
                 item_id, assignee_id, reason,
-                backlog_items, selected_items, assignments, phase_id, phase_name, phase_history,
+                backlog_items, selected_items, assignments, phase_id, phase_name, phase_history, human_messages,
             )
 
     return assignments
@@ -588,10 +606,11 @@ async def _assign_item(
     phase_id: str,
     phase_name: str,
     phase_history: list[dict],
+    human_messages: list[dict] | None = None,
 ) -> tuple[str | None, str]:
     ctx = _build_ctx(
         session, slots, phase_id, phase_name, 1,
-        backlog_items, selected_items, assignments, phase_history,
+        backlog_items, selected_items, assignments, phase_history, human_messages,
     )
 
     async def request_volunteer(slot: _SlotSnap) -> _SlotSnap | None:
@@ -647,13 +666,14 @@ async def _broadcast_acknowledge(
     phase_id: str,
     phase_name: str,
     phase_history: list[dict],
+    human_messages: list[dict] | None = None,
 ) -> None:
     assignee_name = next(
         (s.name for s in slots if s.participant_id == assignee_id), assignee_id
     )
     ctx = _build_ctx(
         session, slots, phase_id, phase_name, 1,
-        backlog_items, selected_items, assignments, phase_history,
+        backlog_items, selected_items, assignments, phase_history, human_messages,
     )
 
     async def notify(slot: _SlotSnap) -> None:
@@ -682,6 +702,7 @@ async def _handle_confirm(
     phase_id: str,
     phase_name: str,
     phase_history: list[dict],
+    human_messages: list[dict] | None = None,
 ) -> float:
     reachable = _reachable_slots(slots)
     total = len(reachable)
@@ -690,7 +711,7 @@ async def _handle_confirm(
 
     ctx = _build_ctx(
         session, slots, phase_id, phase_name, 1,
-        backlog_items, selected_items, assignments, phase_history,
+        backlog_items, selected_items, assignments, phase_history, human_messages,
     )
 
     async def get_confirm(slot: _SlotSnap) -> bool:
