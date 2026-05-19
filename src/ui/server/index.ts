@@ -356,6 +356,19 @@ app.get("/proxy/comm-feed", async (c) => {
   });
 });
 
+// ── GET /proxy/session/:session_id/summary — fetch session summary ─────────────
+
+app.get("/proxy/session/:session_id/summary", async (c) => {
+  const session_id = c.req.param("session_id");
+  try {
+    const resp = await fetch(`${PLATFORM_URL}/sessions/${session_id}/summary`);
+    const data = await resp.json();
+    return c.json(data, resp.status as any);
+  } catch {
+    return c.json({ error: "platform unreachable" }, 502);
+  }
+});
+
 // ── GET /proxy/session/:session_id — fetch session details ────────────────────
 
 app.get("/proxy/session/:session_id", async (c) => {
@@ -391,6 +404,20 @@ app.post("/proxy/join", async (c) => {
     const data = await resp.json();
     return c.json(data, resp.status as any);
   } catch (err) {
+    return c.json({ error: "platform unreachable" }, 502);
+  }
+});
+
+// ── GET /api/* — passthrough to platform (read-only API calls from UI) ────────
+
+app.get("/api/*", async (c) => {
+  const platformPath = c.req.path.replace(/^\/api/, "");
+  const qs = new URL(c.req.raw.url).search;
+  try {
+    const resp = await fetch(`${PLATFORM_URL}${platformPath}${qs}`);
+    const data = await resp.json();
+    return c.json(data, resp.status as any);
+  } catch {
     return c.json({ error: "platform unreachable" }, 502);
   }
 });

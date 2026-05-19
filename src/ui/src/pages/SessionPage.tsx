@@ -8,7 +8,7 @@
  * and its timeout handles the missed response (AC6, AC7).
  */
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { ParticipantsSidebar } from "@/components/ParticipantsSidebar";
@@ -36,6 +36,7 @@ interface ActiveTask {
 
 export default function SessionPage() {
   const { session_id } = useParams<{ session_id: string }>();
+  const navigate = useNavigate();
   const participantId = sessionStorage.getItem(`pid:${session_id}`) ?? "anonymous";
 
   const [tasks, setTasks] = useState<ActiveTask[]>([]);
@@ -86,6 +87,11 @@ export default function SessionPage() {
             { description: payload.reason }
           );
           return;
+        }
+
+        // Navigate to summary screen when session completes
+        if (envelope.task_type === "sprint_backlog" && session_id) {
+          setTimeout(() => navigate(`/sessions/${session_id}/summary`), 4000);
         }
 
         // Add interactive or display tasks to the stack

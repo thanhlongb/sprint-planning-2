@@ -343,6 +343,10 @@ async def _orchestrate(session_id: str) -> None:
     )
     await _broadcast_sprint_backlog(sprint_backlog, slots)
 
+    # ── US-28: Generate and persist session summary ───────────────────────────
+    from app.summary_service import generate_summary  # noqa: PLC0415
+    asyncio.create_task(generate_summary(session_id))
+
 
 def _guard_transition(session: Session, target: str) -> None:
     _ALLOWED: dict[str, set[str]] = {

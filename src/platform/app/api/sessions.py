@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_session
-from app.models import Participant, Session, SessionParticipant, Template
+from app.models import Participant, Session, SessionParticipant, SessionSummary, Template
 from app.session_service import (
     maybe_activate,
     schedule_timeout,
@@ -719,6 +719,38 @@ async def send_message(
             dispatched = len(target_slots)
 
     return {"ok": True, "dispatched_to": dispatched}
+
+
+# ── GET /sessions/{session_id}/summary — US-28 session summary ───────────────
+
+
+@router.get("/{session_id}/summary")
+async def get_session_summary(
+    session_id: str,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    result = await db.execute(select(SessionSummary).where(SessionSummary.session_id == session_id))
+    summary = result.scalar_one_or_none()
+    if summary is None:
+        raise HTTPException(
+            404,
+            detail={"reason": "summary_not_found", "session_id": session_id},
+        )
+    return {
+        "session_id": summary.session_id,
+        "sprint_goal": summary.sprint_goal,
+        "template_used": summary.template_used,
+        "started_at": summary.started_at.isoformat(),
+        "ended_at": summary.ended_at.isoformat(),
+        "duration_seconds": summary.duration_seconds,
+        "participants": summary.participants,
+        "backlog_output": summary.backlog_output,
+        "phase_breakdown": summary.phase_breakdown,
+        "key_decisions": summary.key_decisions,
+        "metrics_snapshot": summary.metrics_snapshot,
+        "messages": summary.messages,
+        "generation_status": summary.generation_status,
+    }
 
 
 # ── GET /sessions/{session_id}/comm-feed — US-26 communication feed SSE ───────

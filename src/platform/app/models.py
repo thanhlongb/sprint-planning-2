@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -48,6 +48,27 @@ class SessionParticipant(Base):
     endpoint: Mapped[str | None] = mapped_column(String, nullable=True)
     # "declared" | "joined" | "absent"
     status: Mapped[str] = mapped_column(String, nullable=False, default="declared")
+
+
+class SessionSummary(Base):
+    __tablename__ = "session_summaries"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(String, ForeignKey("sessions.id"), nullable=False, unique=True, index=True)
+    sprint_goal: Mapped[str] = mapped_column(String, nullable=False, default="")
+    template_used: Mapped[str] = mapped_column(String, nullable=False, default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    ended_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    participants: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    backlog_output: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    phase_breakdown: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    key_decisions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    metrics_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    messages: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # "OK" | "PARTIAL"
+    generation_status: Mapped[str] = mapped_column(String, nullable=False, default="OK")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Template(Base):

@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import "./index.css";
 import JoinPage from "./pages/JoinPage";
 import SessionPage from "./pages/SessionPage";
+import SummaryPage from "./pages/SummaryPage";
 import HomePage from "./pages/HomePage";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -14,6 +15,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Route path="/" element={<HomePage />} />
         <Route path="/join/:session_id" element={<JoinPage />} />
         <Route path="/session/:session_id" element={<SessionPage />} />
+        <Route path="/sessions/:session_id/summary" element={<SummaryPage />} />
       </Routes>
       <Toaster position="top-right" richColors />
     </BrowserRouter>

@@ -17,6 +17,7 @@ export default defineConfig({
       "/proxy": process.env.PROXY_TARGET || "http://localhost:5174",
       "/a2a": process.env.PROXY_TARGET || "http://localhost:5174",
       "/.well-known": process.env.PROXY_TARGET || "http://localhost:5174",
+      "/api": process.env.PROXY_TARGET || "http://localhost:5174",
     },
   },
 });
