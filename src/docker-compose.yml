@@ -79,6 +79,40 @@ services:
       - ./agents/dev-agent/app:/app/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
 
+  llm-po-agent:
+    build:
+      context: ./agents/llm-po-agent
+      dockerfile: Dockerfile
+    environment:
+      AGENT_NAME: llm-po-agent
+      AGENT_ROLE: PRODUCT_OWNER
+      AGENT_PUBLIC_URL: http://llm-po-agent:8011
+      PLATFORM_URL: http://platform:8000
+      LLM_PROVIDER: anthropic
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    ports:
+      - "8011:8011"
+    depends_on:
+      - platform
+
+  llm-dev-agent:
+    build:
+      context: ./agents/llm-dev-agent
+      dockerfile: Dockerfile
+    environment:
+      AGENT_NAME: llm-dev-agent
+      AGENT_ROLE: DEVELOPER
+      AGENT_PUBLIC_URL: http://llm-dev-agent:8012
+      PLATFORM_URL: http://platform:8000
+      LLM_PROVIDER: anthropic
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PERSONA_SPECIALTIES: backend,API,Python
+      PERSONA_SENIORITY: senior
+    ports:
+      - "8012:8012"
+    depends_on:
+      - platform
+
   ui:
     build:
       context: ./ui
