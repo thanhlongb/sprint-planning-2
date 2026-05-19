@@ -12,6 +12,7 @@ import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { ParticipantsSidebar } from "@/components/ParticipantsSidebar";
+import { CommunicationFeed } from "@/components/CommunicationFeed";
 import LobbyView from "@/components/LobbyView";
 import ReadyView from "@/components/ReadyView";
 import BacklogView from "@/components/BacklogView";
@@ -284,13 +285,18 @@ export default function SessionPage() {
       )}
       </main>
       
-      {participants.length > 0 && (
-        <ParticipantsSidebar 
-          participants={participants} 
-          currentTaskType={tasks.length > 0 ? tasks[tasks.length - 1].envelope.task_type : undefined} 
-          myParticipantId={participantId} 
-        />
-      )}
+      <div className="w-72 shrink-0 flex flex-col gap-0">
+        {participants.length > 0 && (
+          <ParticipantsSidebar
+            participants={participants}
+            currentTaskType={tasks.length > 0 ? tasks[tasks.length - 1].envelope.task_type : undefined}
+            myParticipantId={participantId}
+          />
+        )}
+        {session_id && (
+          <CommunicationFeed sessionId={session_id} participants={participants} />
+        )}
+      </div>
     </div>
   );
 }

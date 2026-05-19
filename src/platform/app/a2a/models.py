@@ -34,3 +34,20 @@ class TaskEvent(BaseModel):
     progress: str | None = None
     artifact: dict[str, Any] | None = None
     error: str | None = None
+
+
+class CommEvent(BaseModel):
+    """A single inter-agent communication event for the US-26 comm feed."""
+
+    event_type: str = "comm_event"
+    comm_id: str
+    session_id: str
+    timestamp: str  # ISO-8601
+    sender_id: str
+    sender_name: str
+    receiver_id: str | None = None
+    receiver_name: str | None = None
+    task_type: str
+    # "task_request" | "task_response" | "thought"
+    message_kind: str
+    content: dict[str, Any] | str

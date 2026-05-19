@@ -9,12 +9,14 @@ GET  /sessions      — list all sessions
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -391,3 +393,47 @@ async def list_sessions(db: AsyncSession = Depends(get_session)) -> list[Session
         )
         for s in result.scalars()
     ]
+
+
+# ── GET /sessions/{session_id}/comm-feed — US-26 communication feed SSE ───────
+
+
+@router.get("/{session_id}/comm-feed")
+async def comm_feed_sse(session_id: str) -> StreamingResponse:
+    """Stream inter-agent CommEvents for the given session as SSE."""
+    from app.message_bus import bus
+
+    channel = f"session:comm:{session_id}"
+
+    async def event_stream():
+        pubsub = bus().pubsub()
+        await pubsub.subscribe(channel)
+        queue: asyncio.Queue[str] = asyncio.Queue()
+
+        async def _reader() -> None:
+            async for msg in pubsub.listen():
+                if msg["type"] == "message":
+                    await queue.put(msg["data"])
+
+        reader = asyncio.create_task(_reader())
+        try:
+            yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id})}\n\n"
+            while True:
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )

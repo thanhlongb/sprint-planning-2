@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -53,6 +54,7 @@ class A2AClient:
         bearer_token: str | None = None,
         duration_limit_seconds: float | None = None,
         task_id: str | None = None,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> TaskResult:
         """Send a single A2A task. Handles sync (200) and async (202 + SSE) paths."""
 
@@ -76,7 +78,7 @@ class A2AClient:
 
         try:
             return await asyncio.wait_for(
-                self._run(envelope, endpoint, url, headers, log),
+                self._run(envelope, endpoint, url, headers, log, on_progress),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
@@ -94,6 +96,7 @@ class A2AClient:
         url: str,
         headers: dict[str, str],
         log,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> TaskResult:
         async with httpx.AsyncClient(timeout=None) as client:
             resp = await client.post(
@@ -125,6 +128,7 @@ class A2AClient:
                     task_id=envelope.task_id,
                     headers=headers,
                     log=log,
+                    on_progress=on_progress,
                 )
 
             raise A2AError(
@@ -140,6 +144,7 @@ class A2AClient:
         task_id: str,
         headers: dict[str, str],
         log,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> TaskResult:
         sse_url = self._join(endpoint, f"tasks/{task_id}")
         sse_headers = {**headers, "Accept": "text/event-stream"}
@@ -172,6 +177,8 @@ class A2AClient:
                 if event.status is TaskStatus.WORKING:
                     if event.progress:
                         progress.append(event.progress)
+                        if on_progress:
+                            await on_progress(event.progress)
                     continue
 
                 # Terminal completed / failed (AC4).

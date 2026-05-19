@@ -11,6 +11,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError, field_validator
 from sqlalchemy import select
@@ -24,6 +25,83 @@ log = logging.getLogger(__name__)
 _a2a = A2AClient(default_timeout_seconds=30.0)
 
 ASSIGNMENT_TIMEOUT_SECONDS = 5.0
+
+
+# ── US-26: Communication feed helper ─────────────────────────────────────────
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
+async def _send_task_with_comm(
+    session_id: str,
+    receiver: "_SlotSnap",
+    task_type: str,
+    session_ctx: dict[str, Any],
+    payload: dict[str, Any] | None = None,
+    duration_limit_seconds: float | None = None,
+) -> "TaskResult":
+    """Wraps _a2a.send_task and emits CommEvents to the session comm feed."""
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    receiver_id = receiver.participant_id or receiver.id
+
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session_id,
+        timestamp=_now_iso(),
+        sender_id="platform",
+        sender_name="Platform",
+        receiver_id=receiver_id,
+        receiver_name=receiver.name,
+        task_type=task_type,
+        message_kind="task_request",
+        content=payload or {},
+    ))
+
+    async def _on_progress(thought: str) -> None:
+        await publish_comm_event(CommEvent(
+            comm_id=str(uuid4()),
+            session_id=session_id,
+            timestamp=_now_iso(),
+            sender_id=receiver_id,
+            sender_name=receiver.name,
+            receiver_id=None,
+            receiver_name=None,
+            task_type=task_type,
+            message_kind="thought",
+            content=thought,
+        ))
+
+    result = await _a2a.send_task(
+        endpoint=receiver.endpoint,
+        task_type=task_type,
+        session_ctx=session_ctx,
+        payload=payload,
+        duration_limit_seconds=duration_limit_seconds,
+        on_progress=_on_progress,
+    )
+
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session_id,
+        timestamp=_now_iso(),
+        sender_id=receiver_id,
+        sender_name=receiver.name,
+        receiver_id="platform",
+        receiver_name="Platform",
+        task_type=task_type,
+        message_kind="task_response",
+        content=(
+            result.artifact
+            if result.artifact is not None
+            else {"status": result.status.value, **({"error": result.error} if result.error else {})}
+        ),
+    ))
+
+    return result
 
 # ── Immutable snapshots (avoid detached-ORM-instance issues) ──────────────────
 
@@ -335,11 +413,9 @@ async def _broadcast_sprint_backlog(
                 "session_id": sprint_backlog["session_id"],
                 "sprint_goal": sprint_backlog["sprint_goal"],
             }
-            await _a2a.send_task(
-                endpoint=slot.endpoint,
-                task_type="sprint_backlog",
-                session_ctx=session_ctx,
-                payload=sprint_backlog,
+            await _send_task_with_comm(
+                sprint_backlog["session_id"], slot, "sprint_backlog",
+                session_ctx, sprint_backlog,
             )
             log.info(
                 "sprint_backlog.delivered session_id=%s slot=%s",
@@ -374,11 +450,8 @@ async def _handle_present_items(
         None, None, assignments, phase_history,
     )
     po = po_slots[0]
-    result = await _a2a.send_task(
-        endpoint=po.endpoint,
-        task_type="present_backlog",
-        session_ctx=ctx,
-        payload={},
+    result = await _send_task_with_comm(
+        session.id, po, "present_backlog", ctx, {},
     )
     if not result.ok:
         raise RuntimeError(f"present_backlog failed for slot {po.id}: {result.error}")
@@ -420,11 +493,8 @@ async def _handle_vote(
     )
 
     async def get_votes(slot: _SlotSnap) -> dict[str, str]:
-        r = await _a2a.send_task(
-            endpoint=slot.endpoint,
-            task_type="vote",
-            session_ctx=ctx,
-            payload={"items": item_ids},
+        r = await _send_task_with_comm(
+            session.id, slot, "vote", ctx, {"items": item_ids},
         )
         if not r.ok:
             log.warning(
@@ -525,11 +595,9 @@ async def _assign_item(
     )
 
     async def request_volunteer(slot: _SlotSnap) -> _SlotSnap | None:
-        r = await _a2a.send_task(
-            endpoint=slot.endpoint,
-            task_type="assign_opportunity",
-            session_ctx=ctx,
-            payload={"item_id": item["item_id"], "title": item.get("title", "")},
+        r = await _send_task_with_comm(
+            session.id, slot, "assign_opportunity", ctx,
+            {"item_id": item["item_id"], "title": item.get("title", "")},
             duration_limit_seconds=ASSIGNMENT_TIMEOUT_SECONDS,
         )
         if not r.ok:
@@ -590,11 +658,9 @@ async def _broadcast_acknowledge(
 
     async def notify(slot: _SlotSnap) -> None:
         try:
-            await _a2a.send_task(
-                endpoint=slot.endpoint,
-                task_type="acknowledge_assignment",
-                session_ctx=ctx,
-                payload={
+            await _send_task_with_comm(
+                session.id, slot, "acknowledge_assignment", ctx,
+                {
                     "item_id": item_id,
                     "assignee_id": assignee_id,
                     "assignee_name": assignee_name,
@@ -628,11 +694,9 @@ async def _handle_confirm(
     )
 
     async def get_confirm(slot: _SlotSnap) -> bool:
-        r = await _a2a.send_task(
-            endpoint=slot.endpoint,
-            task_type="confirm",
-            session_ctx=ctx,
-            payload={
+        r = await _send_task_with_comm(
+            session.id, slot, "confirm", ctx,
+            {
                 "sprint_goal": session.sprint_goal,
                 "selected_items": selected_items,
                 "assignments": assignments,

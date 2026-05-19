@@ -285,6 +285,49 @@ app.post("/proxy/respond", async (c) => {
   return c.json({ ok: true, task_id });
 });
 
+// ── GET /proxy/comm-feed — relay US-26 comm-feed SSE from platform ────────────
+
+app.get("/proxy/comm-feed", async (c) => {
+  const session_id = c.req.query("session_id");
+  if (!session_id) return c.json({ error: "session_id required" }, 400);
+
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+
+  (async () => {
+    try {
+      const resp = await fetch(
+        `${PLATFORM_URL}/sessions/${session_id}/comm-feed`,
+        { headers: { Accept: "text/event-stream" } }
+      );
+      if (!resp.ok || !resp.body) {
+        await writer.close().catch(() => {});
+        return;
+      }
+      // @ts-ignore — Bun supports async iteration over response body
+      for await (const chunk of resp.body) {
+        await writer.write(chunk);
+      }
+    } catch {
+      // Client disconnected or platform unavailable
+    } finally {
+      await writer.close().catch(() => {});
+    }
+  })();
+
+  c.req.raw.signal.addEventListener("abort", () => {
+    writer.close().catch(() => {});
+  });
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
+});
+
 // ── GET /proxy/session/:session_id — fetch session details ────────────────────
 
 app.get("/proxy/session/:session_id", async (c) => {
