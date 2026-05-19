@@ -1,0 +1,18 @@
+[project]
+name = "llm-po-agent"
+version = "0.1.0"
+description = "LLM-Backed A2A Remote Agent -- PRODUCT_OWNER role (US-24)"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.8",
+  "httpx>=0.27",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
