@@ -697,6 +697,141 @@ async def _broadcast_acknowledge(
     await asyncio.gather(*[notify(s) for s in all_reachable], return_exceptions=True)
 
 
+# ── US-31: Expertise-Based Assignment Algorithm ────────────────────────────────
+
+
+async def _handle_generate_assignment(
+    session: _SessionSnap,
+    slots: list[_SlotSnap],
+    backlog_items: list[dict],
+    selected_items: list[str],
+    phase_id: str,
+    phase_name: str,
+    phase_history: list[dict],
+    human_messages: list[dict] | None = None,
+) -> dict[str, str]:
+    """Expertise-based assignment using Jaccard similarity + workload balance (US-31)."""
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+    from app.models import Participant
+
+    # Build participant capacity map from Agent Cards (US-34 data)
+    participant_capacity: dict[str, dict[str, object]] = {}
+    async with SessionLocal() as db:
+        for slot in slots:
+            if slot.participant_id and slot.status == "joined":
+                result = await db.execute(
+                    select(Participant).where(Participant.id == slot.participant_id)
+                )
+                p = result.scalar_one_or_none()
+                if p:
+                    cap_raw = (p.capabilities or {}).get("capacity", {})
+                    if not isinstance(cap_raw, dict):
+                        cap_raw = {}
+                    participant_capacity[slot.participant_id] = {
+                        "story_points": int(cap_raw.get("story_points", 0)),
+                        "specialties": list(cap_raw.get("specialties", [])),
+                        "name": slot.name,
+                    }
+
+    if not participant_capacity:
+        log.warning("orchestrator.assign.no_capacity_data session_id=%s", session.id)
+        return {}
+
+    # Track remaining capacity per participant (AC7)
+    remaining: dict[str, int] = {
+        pid: int(cap["story_points"])  # type: ignore[arg-type]
+        for pid, cap in participant_capacity.items()
+    }
+
+    # Build item lookup
+    item_lookup: dict[str, dict[str, object]] = {
+        item["item_id"]: item for item in backlog_items
+    }
+
+    # Deterministic sort: higher priority first, then higher SP, then item_id (AC8)
+    ordered_items = sorted(
+        selected_items,
+        key=lambda iid: (
+            -_PRIORITY_SCORE.get(
+                str(item_lookup.get(iid, {}).get("priority", "LOW")), 1
+            ),
+            -(int(item_lookup.get(iid, {}).get("story_points") or 0)),
+            iid,
+        ),
+    )
+
+    assignments: dict[str, str] = {}
+
+    for item_id in ordered_items:
+        item = item_lookup.get(item_id, {})
+        item_sp = int(item.get("story_points") or 1)
+        item_labels: set[str] = set(
+            item.get("labels", []) if isinstance(item.get("labels"), list) else []
+        )
+
+        best_score = -1.0
+        best_pid: str | None = None
+
+        max_remaining = max(remaining.values()) if remaining else 1
+
+        for pid, cap in participant_capacity.items():
+            if remaining.get(pid, 0) < item_sp:
+                continue  # insufficient remaining capacity (AC3)
+
+            specialties: set[str] = set(
+                cap.get("specialties", [])  # type: ignore[arg-type]
+                if isinstance(cap.get("specialties"), list)
+                else []
+            )
+
+            # Jaccard similarity (AC4)
+            if not item_labels and not specialties:
+                jaccard = 0.0
+            elif not item_labels or not specialties:
+                jaccard = 0.0
+            else:
+                intersection = len(item_labels & specialties)
+                union = len(item_labels | specialties)
+                jaccard = intersection / union if union > 0 else 0.0
+
+            # Workload balance bonus: prefer more remaining capacity (AC4)
+            workload_bonus = remaining[pid] / max_remaining if max_remaining > 0 else 0.0
+
+            score = jaccard + workload_bonus
+
+            if score > best_score:
+                best_score = score
+                best_pid = pid
+
+        if best_pid is not None:
+            assignments[item_id] = best_pid
+            remaining[best_pid] -= item_sp
+
+    # Broadcast assignment proposal via comm bus (AC6)
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session.id,
+        timestamp=_now_iso(),
+        sender_id="platform",
+        sender_name="Platform",
+        receiver_id=None,
+        receiver_name=None,
+        task_type="assignment_proposal",
+        message_kind="broadcast",
+        content={
+            "assignments": assignments,
+            "remaining_capacity": remaining,
+        },
+    ))
+
+    log.info(
+        "orchestrator.generate_assignment session_id=%s assigned=%d/%d",
+        session.id, len(assignments), len(ordered_items),
+    )
+    return assignments
+
+
 async def _handle_confirm(
     session: _SessionSnap,
     slots: list[_SlotSnap],
