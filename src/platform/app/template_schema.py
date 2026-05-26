@@ -37,9 +37,38 @@ class ConfirmAction(ActionBase):
     type: Literal["CONFIRM"]
     requires_unanimous: bool | None = None
     quorum: float | None = None
+    acceptor: str | None = None
 
 
-Action = PresentItemsAction | VoteAction | SelectAction | AssignAction | ConfirmAction
+class GenerateRecommendationAction(ActionBase):
+    type: Literal["GENERATE_RECOMMENDATION"]
+    strategy: str | None = None
+
+
+class GenerateAssignmentAction(ActionBase):
+    type: Literal["GENERATE_ASSIGNMENT"]
+    strategy: str | None = None
+
+
+class OpenDiscussionAction(ActionBase):
+    type: Literal["OPEN_DISCUSSION"]
+    context: Literal["recommendation", "assignment"] | None = None
+    allowed_actions: list[str] | None = None
+    timeout_seconds: int | None = None
+    strategy: str | None = None
+    fallback: str | None = None
+
+
+Action = (
+    PresentItemsAction
+    | VoteAction
+    | SelectAction
+    | AssignAction
+    | ConfirmAction
+    | GenerateRecommendationAction
+    | GenerateAssignmentAction
+    | OpenDiscussionAction
+)
 
 
 class Phase(BaseModel):
