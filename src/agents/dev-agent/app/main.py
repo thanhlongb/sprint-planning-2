@@ -140,6 +140,12 @@ async def receive_task(task: Task, request: Request) -> dict:
     if task.task_type == "confirm":
         return _handle_confirm(task)
 
+    if task.task_type == "recommendation_update":
+        return _handle_recommendation_update(task)
+
+    if task.task_type == "assignment_proposal":
+        return _handle_assignment_proposal(task)
+
     raise HTTPException(400, f"Unsupported task type: {task.task_type}")
 
 
@@ -185,3 +191,86 @@ def _handle_confirm(task: Task) -> dict:
     """Return confirmed=true only when this agent has ≥1 assignment (AC6)."""
     confirmed = _count_own_assignments(task.session_ctx) > 0
     return {"task_id": task.task_id, "status": "completed", "artifact": {"confirmed": confirmed}}
+
+
+# ── Recommendation-update handler (US-36 AC2) ────────────────────────────────
+
+
+def _handle_recommendation_update(task: Task) -> dict:
+    """Acknowledge receipt of a recommendation update.  Informational only.
+
+    The platform broadcasts recalculated recommendation lists during the
+    discussion-driven refinement phase.  No decision is required from the agent.
+    """
+    return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
+
+
+# ── Assignment-proposal handler (US-36 AC3) ───────────────────────────────────
+
+
+def _handle_assignment_proposal(task: Task) -> dict:
+    """Respond to algorithmic assignment map with structured decisions.
+
+    Receives the assignment map (item_id → participant_id) and returns
+    volunteer/object/reassignment decisions based on specialty alignment.
+    """
+    assignments: dict[str, str] = task.payload.get("assignments", {})
+    backlog_items: list[dict] = task.session_ctx.get("backlog_items") or []
+    own_id = _own_participant_id(task.session_ctx)
+
+    volunteers: list[str] = []
+    objects: list[str] = []
+    reassignments: list[dict] = []
+
+    if not own_id:
+        return {
+            "task_id": task.task_id,
+            "status": "completed",
+            "artifact": {
+                "volunteers": volunteers,
+                "objects": objects,
+                "reassignments": reassignments,
+            },
+        }
+
+    item_map: dict[str, dict] = {
+        item["item_id"]: item for item in backlog_items if "item_id" in item
+    }
+
+    my_specialties: set[str] = set(AGENT_SPECIALTIES)
+
+    # Items assigned to this agent
+    assigned_to_me = [iid for iid, pid in assignments.items() if pid == own_id]
+
+    # Object to items assigned to me that don't match my specialties
+    for iid in assigned_to_me:
+        item = item_map.get(iid, {})
+        labels: set[str] = set(item.get("labels", []))
+        if my_specialties and not labels & my_specialties:
+            objects.append(iid)
+
+    # Volunteer for unassigned items matching specialties (respect capacity)
+    total_sp = sum(
+        item_map.get(iid, {}).get("story_points", 0) for iid in assigned_to_me
+    )
+    capacity = AGENT_CAPACITY_SP
+    for iid, pid in assignments.items():
+        if pid:  # skip already assigned items (including unassigned/empty)
+            continue
+        item = item_map.get(iid, {})
+        labels = set(item.get("labels", []))
+        sp = item.get("story_points", 1)
+        if my_specialties and labels & my_specialties:
+            if capacity == 0 or total_sp + sp <= capacity:
+                volunteers.append(iid)
+                total_sp += sp
+
+    return {
+        "task_id": task.task_id,
+        "status": "completed",
+        "artifact": {
+            "volunteers": volunteers,
+            "objects": objects,
+            "reassignments": reassignments,
+        },
+    }

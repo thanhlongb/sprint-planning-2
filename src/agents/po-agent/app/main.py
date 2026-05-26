@@ -197,6 +197,9 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
     if task.task_type == "confirm":
         return _handle_confirm(task)
 
+    if task.task_type == "accept_plan":
+        return _handle_accept_plan(task)
+
     raise HTTPException(400, f"Unsupported task type: {task.task_type}")
 
 
@@ -241,6 +244,25 @@ def _handle_confirm(task: Task) -> dict:
         "task_id": task.task_id,
         "status": "completed",
         "artifact": {"confirmed": confirmed},
+    }
+
+
+# ── Accept-plan handler (US-36 AC1) ──────────────────────────────────────────
+
+
+def _handle_accept_plan(task: Task) -> dict:
+    """Accept the final sprint plan — return accepted=true if backlog non-empty.
+
+    Receives the final sprint backlog in session_ctx (selected_items or
+    backlog_items).  Deterministic: same input always produces the same output.
+    """
+    selected_items = task.session_ctx.get("selected_items")
+    backlog_items = task.session_ctx.get("backlog_items")
+    non_empty = bool(selected_items or backlog_items)
+    return {
+        "task_id": task.task_id,
+        "status": "completed",
+        "artifact": {"accepted": non_empty},
     }
 
 
