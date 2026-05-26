@@ -276,12 +276,37 @@ async def _orchestrate(session_id: str) -> None:
     assignments: dict[str, str] = (row.context or {}).get("assignments", {})
     phase_history: list[dict] = (row.context or {}).get("phase_history", [])
 
+    # US-33: Detect template version (v1 vs v2)
+    is_v2 = "v2" in session.template.lower()
+    log.info(
+        "orchestrator.template_version session_id=%s template=%s is_v2=%s",
+        session_id, session.template, is_v2,
+    )
+
+    # US-35: Convergence metrics tracking (nullable — v1 sessions don't populate)
+    recommendation_rounds: int | None = None
+    assignment_rounds: int | None = None
+    initial_recommendation: list[str] | None = None
+    retention_pct: float | None = None
+
+    # ── v2: fetch backlog from PO before recommendation phase if needed ────────
+    if is_v2 and backlog_items is None:
+        human_messages_init = await _refresh_human_messages(session_id)
+        try:
+            backlog_items = await _handle_present_items(
+                session, slots, "init", "Backlog Fetch", {}, [], human_messages_init,
+            )
+            log.info("orchestrator.v2.fetched_backlog session_id=%s count=%d", session_id, len(backlog_items))
+        except Exception:
+            log.warning("orchestrator.v2.no_backlog session_id=%s", session_id)
+            backlog_items = []
+
     for phase in template_row.phases:
         phase_id = phase["phase_id"]
         phase_name = phase["name"]
         log.info("orchestrator.phase.start session_id=%s phase_id=%s", session_id, phase_id)
 
-        action_context = {}
+        action_context: dict[str, Any] = {}
         outcome = ""
 
         for action in phase.get("actions", []):
@@ -291,6 +316,7 @@ async def _orchestrate(session_id: str) -> None:
             # Refresh human messages from DB before each task dispatch (US-27 AC4)
             human_messages: list[dict] = await _refresh_human_messages(session_id)
 
+            # ── v1 actions (retained for compatibility, US-33 AC6) ──────
             if action_type == "PRESENT_ITEMS":
                 backlog_items = await _handle_present_items(session, slots, phase_id, phase_name, assignments, phase_history, human_messages)
                 outcome = f"{len(backlog_items)} items received"
@@ -304,8 +330,104 @@ async def _orchestrate(session_id: str) -> None:
                 assignments = await _handle_assign(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history, human_messages)
                 outcome = f"{len(assignments)} items assigned"
             elif action_type == "CONFIRM":
-                quorum = await _handle_confirm(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history, human_messages)
-                outcome = f"quorum {quorum:.0%}"
+                quorum = await _handle_confirm(
+                    session, slots, backlog_items or [], selected_items or [],
+                    assignments, phase_id, phase_name, phase_history, human_messages,
+                    is_v2=is_v2,
+                )
+                if is_v2:
+                    outcome = f"po_confirmed={quorum:.0%}"
+                    # US-35 AC4: Calculate retention_pct at confirmation
+                    if initial_recommendation:
+                        final_set = set(selected_items or [])
+                        initial_set = set(initial_recommendation)
+                        if initial_set:
+                            retention_pct = len(final_set & initial_set) / len(initial_set)
+                else:
+                    outcome = f"quorum {quorum:.0%}"
+
+            # ── v2 actions (US-33 AC4) ──────────────────────────────────
+            elif action_type == "GENERATE_RECOMMENDATION":
+                if not is_v2:
+                    log.warning("orchestrator.v2_action_in_v1 session_id=%s action=%s", session_id, action_type)
+                    continue
+
+                # Get discussion config from the next OPEN_DISCUSSION action if present
+                disc_cfg: dict[str, Any] = {}
+                actions_list = phase.get("actions", [])
+                for i, a in enumerate(actions_list):
+                    if a is action:
+                        if i + 1 < len(actions_list) and actions_list[i + 1].get("type") == "OPEN_DISCUSSION":
+                            next_a = actions_list[i + 1]
+                            disc_cfg = {
+                                "allowed_actions": next_a.get("allowed_actions", []),
+                                "timeout_seconds": next_a.get("timeout_seconds", 60),
+                            }
+                        break
+
+                rec_items, rec_rounds = await _handle_recommend(
+                    session, slots, backlog_items or [],
+                    phase_id, phase_name, phase_history, human_messages,
+                    discussion_config=disc_cfg,
+                )
+                selected_items = rec_items
+                # US-35 AC1: Snapshot initial recommendation
+                initial_recommendation = list(rec_items)
+                recommendation_rounds = rec_rounds
+                outcome = f"{len(rec_items)} items recommended, {rec_rounds} rounds"
+
+            elif action_type == "GENERATE_ASSIGNMENT":
+                if not is_v2:
+                    log.warning("orchestrator.v2_action_in_v1 session_id=%s action=%s", session_id, action_type)
+                    continue
+
+                # Run expertise-based assignment
+                gen_assignments = await _handle_generate_assignment(
+                    session, slots, backlog_items or [], selected_items or [],
+                    phase_id, phase_name, phase_history, human_messages,
+                )
+                assignments = gen_assignments
+
+                # Get discussion config from OPEN_DISCUSSION if it follows
+                disc_cfg = {}
+                actions_list = phase.get("actions", [])
+                for i, a in enumerate(actions_list):
+                    if a is action:
+                        if i + 1 < len(actions_list) and actions_list[i + 1].get("type") == "OPEN_DISCUSSION":
+                            next_a = actions_list[i + 1]
+                            disc_cfg = {
+                                "allowed_actions": next_a.get("allowed_actions", []),
+                                "timeout_seconds": next_a.get("timeout_seconds", 60),
+                            }
+                        break
+
+                # Enter discussion if configured
+                if disc_cfg.get("allowed_actions"):
+                    _, final_assignments, asgn_rounds = await _handle_discussion(
+                        session=session,
+                        slots=slots,
+                        context="assignment",
+                        allowed_actions=disc_cfg["allowed_actions"],
+                        timeout_seconds=disc_cfg.get("timeout_seconds", 60),
+                        backlog_items=backlog_items or [],
+                        selected_items=selected_items or [],
+                        assignments=assignments,
+                        phase_id=phase_id,
+                        phase_name=phase_name,
+                        phase_history=phase_history,
+                        human_messages=human_messages,
+                    )
+                    assignments = final_assignments
+                    assignment_rounds = asgn_rounds
+                outcome = f"{len(assignments)} items assigned, {assignment_rounds or 0} rounds"
+
+            elif action_type == "OPEN_DISCUSSION":
+                if not is_v2:
+                    log.warning("orchestrator.v2_action_in_v1 session_id=%s action=%s", session_id, action_type)
+                    continue
+                # OPEN_DISCUSSION is handled inline by GENERATE_RECOMMENDATION / GENERATE_ASSIGNMENT
+                # If reached standalone (shouldn't happen), log and skip
+                log.info("orchestrator.open_discussion.standalone_skip session_id=%s phase_id=%s", session_id, phase_id)
 
         phase_history.append({
             "phase_id": phase_id,
@@ -313,13 +435,23 @@ async def _orchestrate(session_id: str) -> None:
             "outcome": outcome,
         })
 
-        updates = {"phase_history": phase_history}
+        updates: dict[str, Any] = {"phase_history": phase_history}
         if backlog_items is not None:
             updates["backlog_items"] = backlog_items
         if selected_items is not None:
             updates["selected_items"] = selected_items
         if assignments:
             updates["assignments"] = assignments
+        # US-35 AC5: Persist convergence metrics
+        if is_v2:
+            if initial_recommendation is not None:
+                updates["initial_recommendation"] = initial_recommendation
+            if recommendation_rounds is not None:
+                updates["recommendation_rounds"] = recommendation_rounds
+            if assignment_rounds is not None:
+                updates["assignment_rounds"] = assignment_rounds
+            if retention_pct is not None:
+                updates["retention_pct"] = retention_pct
         await _commit_ctx(session_id, updates)
         log.info("orchestrator.phase.done session_id=%s phase_id=%s outcome=%s", session_id, phase_id, outcome)
 
