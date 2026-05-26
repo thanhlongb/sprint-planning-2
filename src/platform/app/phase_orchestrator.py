@@ -642,8 +642,26 @@ async def _broadcast_phase_started(
     phase_history: list[dict],
     human_messages: list[dict] | None = None,
 ) -> None:
-    """Broadcast a phase_started A2A task to all HUMAN participants so the UI
-    knows which phase is active during discussion-driven phases (US-36)."""
+    """Broadcast phase_started to HUMAN participants via A2A (if joined) or
+    comm bus (always) so the UI knows which phase is active."""
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    # Always publish to comm bus — reaches humans who haven't joined yet
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session.id,
+        timestamp=_now_iso(),
+        sender_id="platform",
+        sender_name="Platform",
+        receiver_id=None,
+        receiver_name=None,
+        task_type="phase_started",
+        message_kind="broadcast",
+        content={"phase": phase, "sprint_goal": session.sprint_goal if phase == "recommendation" else None},
+    ))
+
+    # Also try A2A for humans who are already joined with an endpoint
     human_slots = [
         s for s in slots
         if s.slot_type == "HUMAN" and s.status == "joined" and s.endpoint

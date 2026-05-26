@@ -182,6 +182,20 @@ export default function SessionPage() {
       case "session_invite":
         return <LobbyView sessionCtx={ctx} />;
       case "session_ready":
+        // v2: after session_ready, the recommendation phase starts immediately.
+        // Show RecommendationView so the human sees the task list, not a blank screen.
+        if (isV2 && session_id) {
+          return (
+            <RecommendationView
+              sessionId={session_id}
+              sessionCtx={ctx}
+              myParticipantId={participantId}
+              myName={
+                sessionStorage.getItem(`name:${session_id}`) ?? undefined
+              }
+            />
+          );
+        }
         return <ReadyView sessionCtx={ctx} />;
       case "present_backlog":
         // v2: route to RecommendationView for discussion-driven recommendation
