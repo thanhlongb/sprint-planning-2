@@ -1,0 +1,208 @@
+<?xml version="1.0"?>
+<Application>
+  <ApplicationInfo>
+    <RoundId>11242</RoundId>
+    <RoundName>Sprint Planning for Human-AI Agile Teams</RoundName>
+    <ApplicationIdentifier>H2026-0234</ApplicationIdentifier>
+    <ApplicationType>Human Research Ethics Application</ApplicationType>
+    <ResponseVersion>1.0</ResponseVersion>
+    <ApplicationTitle>&lt;p&gt;HAiSP: Sprint Planning for Human-AI Agile Teams&lt;/p&gt;</ApplicationTitle>
+    <CreatedDate>20/05/2026 4:51:45 PM</CreatedDate>
+  </ApplicationInfo>
+  <q1>Acknowledge and Continue</q1>
+  <q693>&lt;p&gt;HAiSP: Sprint Planning for Human-AI Agile Teams&lt;/p&gt;</q693>
+  <q694>&lt;p&gt;This study evaluates the HAiSP (Human-Ai Sprint Planning) platform, a multi-agent system that enables human developers and AI agents to jointly conduct Agile sprint planning. We first validate the platform's automated prioritisation consensus and task assignment algorithms through fully autonomous agent-only sessions. We then recruit 15–20 experienced software practitioners to participate in mixed human-agent sprint planning sessions online, completing a post-session questionnaire grounded in the Technology Acceptance Model (TAM) to measure perceived usefulness, ease of use, and adoption intention. Expected outcomes include technical feasibility evidence for automated multi-agent sprint planning and empirical data on practitioner perceptions of AI agents as collaborative planning partners. Results will inform the design of AI-native Agile workflows and contribute algorithm designs to the emerging field of human-AI collaborative software engineering.&lt;/p&gt;</q694>
+  <q1450>&lt;p&gt;The study falls into the following categories:&lt;/p&gt;
+&lt;ul&gt;&lt;li&gt;4612 - Software engineering&lt;ul&gt;&lt;li&gt;461207 - Software quality, processes and metrics&lt;/li&gt;&lt;li&gt;461201 - Automated software engineering&lt;/li&gt;&lt;/ul&gt;&lt;/li&gt;&lt;/ul&gt;</q1450>
+  <q1455>Online</q1455>
+  <q1462>&lt;p&gt;University of Wollongong&lt;br&gt;&lt;/p&gt;</q1462>
+  <q800>&lt;p&gt;N/A&lt;/p&gt;</q800>
+  <q1325>ASAP</q1325>
+  <q1232>2 Months</q1232>
+  <TeamMembersRpt>
+    <q645>Professor</q645>
+    <q646>Hoa Khanh</q646>
+    <q647>Dam</q647>
+    <q649>hoa@uow.edu.au</q649>
+    <q668>No</q668>
+    <q656>No</q656>
+    <q701>University of Wollongong</q701>
+    <q835>Principal Investigator</q835>
+    <q1442>Yes</q1442>
+    <q703>Directly supervising students</q703>
+    <q704>His research expertise lies primarily in the intersection of Software Engineering and Artificial Intelligence, which is relevant to this project.</q704>
+  </TeamMembersRpt>
+  <TeamMembersRpt>
+    <q645>Mr</q645>
+    <q646>Long Thanh</q646>
+    <q647>Bui</q647>
+    <q649>tlb959@uowmail.edu.au</q649>
+    <q668>Yes</q668>
+    <q669>tlb959@uowmail.edu.au</q669>
+    <q671>0497267112</q671>
+    <q672>6 Frances St, Gwynneville NSW 2500</q672>
+    <q656>Yes</q656>
+    <q702>&lt;p&gt;Professor Hoa Khanh Dam is the main PhD supervisor of Long Thanh Long&lt;/p&gt;</q702>
+    <q659>Doctorate</q659>
+    <q701>&lt;p&gt;University of Wollongong&lt;/p&gt;</q701>
+    <q835>Investigator/Researcher</q835>
+    <q1442>No</q1442>
+    <q703>&lt;ul&gt;&lt;li&gt;Prepare the questionnaire.&lt;/li&gt;&lt;li&gt;Carrying out data collection and analysis.&lt;/li&gt;&lt;li&gt;Finding participants and conduct interviews.&lt;/li&gt;&lt;li&gt;Analysing the results &amp;amp; reporting the findings.&lt;/li&gt;&lt;/ul&gt;</q703>
+    <q704>&lt;p&gt;Conducted research in computer science and software engineering. Current research topic focuses on GenAI agent.&lt;/p&gt;</q704>
+  </TeamMembersRpt>
+  <TeamMembersRpt>
+    <q645>Dr</q645>
+    <q646>Morakot</q646>
+    <q647>Choetkiertikul</q647>
+    <q649>morakotch@gmail.com</q649>
+    <q668>No</q668>
+    <q656>No</q656>
+    <q701>&lt;p&gt;Assistant Professor&lt;br&gt;Faculty of Information and Communication Technology (ICT)&lt;br&gt;Mahidol University, Nakhon Pathom, Thailand&lt;br&gt;&lt;/p&gt;</q701>
+    <q835>Associate/Assistant/Sub-/Co- Investigator/Researcher</q835>
+    <q1442>No</q1442>
+    <q703>&lt;p&gt;Support in writing the paper.&lt;/p&gt;</q703>
+    <q704>&lt;p&gt;His research focuses on &lt;strong&gt;AI-Driven Software Engineering (e.g. predicting delays)&lt;/strong&gt;. His research has been published at top-tier software engineering venues, such as IEEE Transactions on Software Engineering (TSE), Empirical Software Engineering (EMSE), and the International Conference on Software Engineering (ICSE). His Ph.D. thesis receives the Examiners’ Commendation for Outstanding Thesis.&lt;/p&gt;</q704>
+  </TeamMembersRpt>
+  <q54>No</q54>
+  <q59>No</q59>
+  <q62>No</q62>
+  <q778>No</q778>
+  <q1237>No</q1237>
+  <q788>No</q788>
+  <q1452>No</q1452>
+  <q72>Survey/Interview/Focus Group research</q72>
+  <q74>Human beings (via active participation), including their associated biospecimens and/or data</q74>
+  <q1471>No</q1471>
+  <q75>People in other countries</q75>
+  <q862 />
+  <q137>No</q137>
+  <q138>No</q138>
+  <q141 />
+  <q144>No</q144>
+  <q143>No</q143>
+  <q1242 />
+  <q538 />
+  <q906>No</q906>
+  <q93>No</q93>
+  <q1125 />
+  <q1634 />
+  <q516 />
+  <q517 />
+  <q103>No</q103>
+  <q1464 />
+  <q914 />
+  <q1590 />
+  <q1414 />
+  <q896>Surveys|Focus groups</q896>
+  <q897>Indirectly, via an online provider</q897>
+  <q899>&lt;p&gt;During the group sessions, participants are instructed to join a web-based platform developed for this project and not use their personal name to avoid linking them to the interactions on the website. Hence, the data generated throughout the sessions are not identifiable.&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;For the post-session questionnaire, no personal identifiers is requested from the participants.&lt;/p&gt;</q899>
+  <q900>No</q900>
+  <q1040 />
+  <q1089>&lt;p&gt;Due to the data collection mechanism of the research, it is not possible to identify the participant's collected data, hence, not possible to review or edit their responses.&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q1089>
+  <q903>Yes</q903>
+  <q147 />
+  <q149>No</q149>
+  <q157>No</q157>
+  <q159>No</q159>
+  <q220 />
+  <q254 />
+  <q323>No</q323>
+  <q942>No</q942>
+  <q327>No</q327>
+  <q325>No</q325>
+  <q328>No</q328>
+  <q941>No</q941>
+  <q558>&lt;p&gt;The digital consent process will be supplemented by verbal explanations in accordance with local oral traditions.&lt;/p&gt;</q558>
+  <q559>&lt;p&gt;The web app’s logic and data models will be audited to ensure they do not hardcode Western-centric hierarchies or binary gender structures that conflict with local social systems&lt;/p&gt;</q559>
+  <OtherCountriesRpt>
+    <q818>Vietnam</q818>
+    <q819>No</q819>
+    <q821>No</q821>
+    <q826 />
+  </OtherCountriesRpt>
+  <q562>&lt;p&gt;N/A&lt;/p&gt;</q562>
+  <q369>Yes</q369>
+  <q563>&lt;p&gt;I would engage Assistant Professor&amp;nbsp;Morakot Choetkiertikul, Ph.D. for his relevant expertise with the project for paper writing and review.&amp;nbsp;&lt;br&gt;&lt;/p&gt;</q563>
+  <q564>&lt;p&gt;Dr.&amp;nbsp;Morakot Choetkiertikul is&amp;nbsp;a lecturer at &lt;a href="http://www.ict.mahidol.ac.th/"&gt;the Faculty of ICT, Mahidol University, Thailand&lt;/a&gt;, where he is&amp;nbsp;co-founding the &lt;a href="https://muict-seru.github.io/"&gt;SERU&lt;/a&gt; research group. He graduated Ph.D. in computer science from the School of Computing and Information Technology, Faculty of Engineering and Information Sciences (EIS), &lt;a href="https://www.uow.edu.au/index.html"&gt;University of Wollongong (UOW)&lt;/a&gt;, Australia. At UOW, he worked in the &lt;a href="http://www.dsl.uow.edu.au/" target="_blank" rel="noreferrer noopener"&gt;Decision Support Lab (DSL).&lt;/a&gt;&amp;nbsp;his current research focuses on &lt;strong&gt;AI-Driven Software Engineering (e.g. predicting delays)&lt;/strong&gt;. His research has been published at top-tier software engineering venues, such as IEEE Transactions on Software Engineering (TSE), Empirical Software Engineering (EMSE), and the International Conference on Software Engineering (ICSE). His Ph.D. thesis receives the Examiners’ Commendation for Outstanding Thesis.&lt;/p&gt;</q564>
+  <q565>&lt;p&gt;Dr.&amp;nbsp;Morakot Choetkiertikul will not engage with the participants.&lt;br&gt;&lt;/p&gt;</q565>
+  <q566>&lt;p&gt;Thanh Long Bui.&lt;/p&gt;</q566>
+  <q567>&lt;p&gt;Participants will be recruited through the researchers' professional network, university channels, and direct outreach to software development practitioners. Interested respondents will be directed to the Participant Information Sheet and Consent Form. Participation is voluntary. Sessions will be scheduled at mutually convenient times across multiple time slots.&lt;/p&gt;</q567>
+  <q1419>&lt;p&gt;The project will explicitly communicate the limitations of the web app as a research tool rather than a permanent service&lt;/p&gt;</q1419>
+  <q572>&lt;p&gt;The researchers will recruit participants from their professional network and university channels using the advertisement poster. The interested respondents will be provided with the links to the participant information sheet and consent form. If they wish to join the study, they will have to accept and agree on the consent form. There will be multiple sessions scheduled at participants' mutually convenient times.&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q572>
+  <q573>&lt;p&gt;As this study is conducted online via Google Meet, it may recruit software practitioners globally.&lt;/p&gt;
+&lt;ol&gt;&lt;li&gt;Local Power and Customs: The culture relevant to this study is the global professional culture of software engineering, specifically Agile methodology, which shares standardised terminology and practices worldwide. Therefore, the risk of cultural misalignment or exploitation of local beliefs is negligible. The software effort estimation task is a widely practiced industry standard.&lt;/li&gt;&lt;li&gt;Undue Influence and Exploitation: Participants are skilled professionals and clearly informed that there will no incentive provided for joining this study. &lt;/li&gt;&lt;li&gt;Legal and Data Compliance: The study adheres to the strict privacy standards of the Australian National Statement and the University of Wollongong. &lt;/li&gt;&lt;/ol&gt;</q573>
+  <q860>No</q860>
+  <q716>&lt;p&gt;Prospective participants will receive a secure link to a Qualtrics form containing the participant information sheet, screening questions and a consent form. To submit, they must sign and upload the completed consent form. Participants will be given a week to consider their involvement voluntarily. During this consideration period, participants are free to contact the researchers via email to ask any questions they may have. The Student Investigator will be responsible for all communication and the entire consent process, from information provision to final confirmation. After one week, if no response or signed consent form is received, it will be assumed the individual is not interested in participating, and no further contact will be made regarding this research.&lt;br&gt;&lt;/p&gt;</q716>
+  <q167>Yes for all participants</q167>
+  <q168>Specific</q168>
+  <q169>Written</q169>
+  <q170>No</q170>
+  <q171>No</q171>
+  <q172>No</q172>
+  <q576 />
+  <q178>No</q178>
+  <q993>No</q993>
+  <q1429>No</q1429>
+  <q577>&lt;p&gt;&lt;strong&gt;#1 &lt;/strong&gt;&lt;strong&gt;&lt;strong&gt;Approach to Consent and Participant Understanding&lt;/strong&gt;&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;Consent will be sought via a "digital opt-in" mechanism. Participants will be provided with the Participant Information Sheet (PIS) via email. They must actively check a box or digitally sign a Consent Form prior to the commencement of the Google Meet session.&lt;br&gt;&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;#2 Language and Literacy&lt;/strong&gt;&lt;br&gt;&lt;br&gt;The study requires participants to discuss complex technical software requirements in English. More importantly, English proficiency is a mandatory inclusion criterion. This is an operational requirement for the validity of the textual analysis, not an exclusion based on race or ethnicity.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;#3 Involvement of People in Other Countries&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;This study offers no incentive and is clearly stated that in the PIS, hence, there is no exploitation of cheap labor or vulnerable populations often associated with international research.&lt;br&gt;&lt;/p&gt;</q577>
+  <q176>No</q176>
+  <q177>No</q177>
+  <q1008 />
+  <q1004>No</q1004>
+  <q213>No</q213>
+  <q239>No</q239>
+  <q240>No</q240>
+  <q585>&lt;p&gt;This research have potential burdens primarily limited to time commitment and mild psychological discomfort. As the study design involves simulating effort estimation negotiation with intentional conflicting viewpoints and ambiguous tasks, participants may experience minor frustration or performance anxiety similar to that found in standard workplace meetings.&lt;br&gt;&lt;/p&gt;</q585>
+  <q586>&lt;p&gt;To mitigate this, the Participant Information Sheet will explicitly frame the session as a simulation focused on the process rather than technical capability, emphasising that there are no "correct" estimates. Participation is entirely voluntary, and participants may withdraw at any time without penalty.&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q586>
+  <q587>&lt;p&gt;There will be no benefits toward the participants of this research other than having an opportunity to experience a novel approach in conducting simulated sprint planning. For the wider community, the results of this study will be beneficial in terms of:&lt;/p&gt;
+&lt;p&gt;1. Contributes to the design of future AI agents that support, rather than disrupt, human agile teams.&lt;/p&gt;
+&lt;p&gt;2. Providing insights into the how human practitioners perceive the role and benefits of affective agents in sprint planning.&lt;/p&gt;</q587>
+  <q588>&lt;p&gt;The potential benefits of this research are substantial for both the software engineering industry and the broader field of Human-AI Interaction. The knowledge generated will provide evidence-based guidelines for designing future AI "co-pilots" that support human well-being and reduce conflict, rather than purely logic-driven tools that may inadvertently increase workplace stress.&lt;/p&gt;
+&lt;p&gt;These significant potential benefits outweigh the minimal risks and burdens associated with the study.&lt;br&gt;&lt;/p&gt;</q588>
+  <q589>&lt;p&gt;We will transparently inform participants that the AI agents are research tools that may occasionally hallucinate or provide incorrect technical data. This manages the expectation of "AI infallibility" and prevents frustration if the agent underperforms.&lt;br&gt;&lt;/p&gt;</q589>
+  <q436>Not personal information</q436>
+  <q438>Not personal information</q438>
+  <q441>Non-identifiable information</q441>
+  <q443>Non-identifiable information</q443>
+  <q592>&lt;p&gt;This study collects non-identifiable information that are only relevant to the software sprint planning discussion that is purely technical.&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q592>
+  <q448>Individual participants and/or relatives or associates of participants</q448>
+  <q593>&lt;p&gt;N/A&lt;/p&gt;</q593>
+  <q453>No</q453>
+  <q455>No</q455>
+  <q1024>&lt;p&gt;I don't plan to disclose any information obtained from participants.&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q1024>
+  <q1025>No</q1025>
+  <q459>No</q459>
+  <q599>&lt;p&gt;N/A&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q599>
+  <q600>&lt;p&gt;All digital research data will be stored on the University of Wollongong’s OneDrive.&lt;/p&gt;
+&lt;p&gt;The research team will verify that all digital data have been migrated to the University’s secure long-term storage for the mandatory 5-year retention period, and all temporary local copies will be securely deleted using digital erasure standards.&lt;/p&gt;
+&lt;p&gt;At the conclusion of the 5-year period, the Data Custodian (Principal Investigator) will authorise the permanent destruction of digital files using secure electronic deletion methods that ensure the data is unrecoverable, as per UOW IT security protocols. &lt;/p&gt;</q600>
+  <q601>&lt;p&gt;N/A&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q601>
+  <q467>Yes</q467>
+  <q1405>&lt;p&gt;The research paper will be emailed to participants upon request once the results have been peer-reviewed and published.&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q1405>
+  <q602>&lt;p&gt;N/A&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q602>
+  <q603>&lt;p&gt;N/A&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q603>
+  <q604>&lt;p&gt;N/A&lt;/p&gt;
+&lt;p&gt;&lt;br&gt;&lt;/p&gt;</q604>
+  <q737>Research_Protocol V1 22052026.docx</q737>
+  <q1222>No</q1222>
+  <q1251>Low risk review pathway</q1251>
+  <q1407>No</q1407>
+  <TeamMemberDeclarationRpt>
+    <q725>Wet ink sign after printing</q725>
+    <q733>Professor Hoa Khanh Dam</q733>
+  </TeamMemberDeclarationRpt>
+</Application>
