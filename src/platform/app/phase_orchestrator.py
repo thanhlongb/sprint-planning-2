@@ -465,6 +465,22 @@ async def _orchestrate(session_id: str) -> None:
 
     log.info("orchestrator.completed session_id=%s", session_id)
 
+    # ── US-35: Read convergence metrics from context for sprint backlog ──────
+    conv_metrics: dict[str, Any] | None = None
+    if is_v2:
+        async with SessionLocal() as db:
+            result = await db.execute(select(Session).where(Session.id == session_id))
+            crow = result.scalar_one_or_none()
+            if crow:
+                ctx = crow.context or {}
+                conv = {}
+                for key in ("initial_recommendation", "recommendation_rounds",
+                            "assignment_rounds", "retention_pct"):
+                    if key in ctx:
+                        conv[key] = ctx[key]
+                if conv:
+                    conv_metrics = conv
+
     # ── US-08: Build and broadcast the final sprint backlog ───────────────────
     sprint_backlog = _build_sprint_backlog(
         session=session,
@@ -472,6 +488,7 @@ async def _orchestrate(session_id: str) -> None:
         backlog_items=backlog_items or [],
         selected_items=selected_items or [],
         assignments=assignments,
+        convergence_metrics=conv_metrics,
     )
     await _broadcast_sprint_backlog(sprint_backlog, slots)
 
@@ -501,6 +518,7 @@ def _build_sprint_backlog(
     backlog_items: list[dict],
     selected_items: list[str],
     assignments: dict[str, str],
+    convergence_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # Build lookup maps
     item_lookup: dict[str, dict] = {item["item_id"]: item for item in backlog_items}
@@ -544,12 +562,16 @@ def _build_sprint_backlog(
         for aid, sp in capacity_by_assignee.items()
     ]
 
-    return {
+    result: dict[str, Any] = {
         "session_id": session.id,
         "sprint_goal": session.sprint_goal,
         "selected_items": selected_item_entries,
         "capacity_plan": capacity_plan,
     }
+    # US-35 AC6: Include convergence metrics in sprint backlog output
+    if convergence_metrics:
+        result["convergence_metrics"] = convergence_metrics
+    return result
 
 
 async def _broadcast_sprint_backlog(
