@@ -1,0 +1,55 @@
+ProcessTemplate:
+  template_id: "sprint_planning_v2"
+  name: "HASP — Goal-Driven Sprint Planning"
+  description: "Platform recommends goal-aligned tasks, team refines through discussion, assigns by expertise, PO confirms."
+
+  phases:
+    - phase_id: "recommendation"
+      name: "Goal-Aligned Recommendation & Refinement"
+      description: "Platform generates initial task group, then participants discuss and refine"
+      required_roles: ["PRODUCT_OWNER", "DEVELOPER"]
+      actions:
+        - type: GENERATE_RECOMMENDATION
+          strategy: semantic_similarity
+        - type: OPEN_DISCUSSION
+          context: recommendation
+          allowed_actions: [add_item, remove_item, modify_item]
+          timeout_seconds: 60
+      turn_order: FACILITATOR_LED
+      transition: MANUAL
+
+    - phase_id: "assignment"
+      name: "Task Assignment"
+      description: "Platform proposes expertise-based assignments, team discusses and negotiates"
+      required_roles: ["DEVELOPER"]
+      actions:
+        - type: GENERATE_ASSIGNMENT
+          strategy: EXPERTISE_BASED
+        - type: OPEN_DISCUSSION
+          context: assignment
+          allowed_actions: [volunteer, object, reassign]
+          strategy: VOLUNTEER_FIRST
+          fallback: AUTO_BALANCE
+          timeout_seconds: 60
+      turn_order: FACILITATOR_LED
+      transition: MANUAL
+
+    - phase_id: "confirmation"
+      name: "PO Confirmation"
+      description: "Product Owner reviews and accepts the final sprint plan"
+      required_roles: ["PRODUCT_OWNER"]
+      actions:
+        - type: CONFIRM
+          acceptor: PRODUCT_OWNER
+      turn_order: ROLE_FIRST
+      transition: AUTO
+
+  inputs:
+    - product_backlog           # From PRODUCT_OWNER participant
+    - sprint_goal               # PO-defined goal for the sprint
+    - capacity_constraints      # Story points + specialties per participant
+
+  outputs:
+    - sprint_backlog            # Selected items with assignments
+    - sprint_goal               # Confirmed goal statement
+    - convergence_metrics       # recommendation_rounds, assignment_rounds, retention_pct
