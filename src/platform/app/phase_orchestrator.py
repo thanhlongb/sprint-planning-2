@@ -832,6 +832,347 @@ async def _handle_generate_assignment(
     return assignments
 
 
+# ── US-32: Discussion Phase Handler ─────────────────────────────────────────────
+
+
+def _apply_recommendation_action(
+    event: "CommEvent",
+    working_items: list[str],
+    backlog_items: list[dict],
+) -> bool:
+    """Apply a recommendation-context action. Returns True if state changed."""
+    content = event.content if isinstance(event.content, dict) else {}
+    action = event.task_type
+
+    if action == "add_item":
+        item_data = content.get("item", content)
+        item_id = item_data.get("item_id", "")
+        if not item_id or item_id in working_items:
+            return False
+        # Add to working list if not already present
+        if item_id not in {it["item_id"] for it in backlog_items}:
+            # Validate and add to backlog
+            try:
+                validated = BacklogItem.model_validate(item_data)
+                backlog_items.append(validated.model_dump())
+            except ValidationError:
+                return False
+        working_items.append(item_id)
+        log.info("discussion.add_item item_id=%s", item_id)
+        return True
+
+    elif action == "remove_item":
+        item_id = content.get("item_id", "")
+        if item_id in working_items:
+            working_items.remove(item_id)
+            log.info("discussion.remove_item item_id=%s", item_id)
+            return True
+        return False
+
+    elif action == "modify_item":
+        item_id = content.get("item_id", "")
+        updates = content.get("updates", {})
+        if not item_id or not updates:
+            return False
+        for item in backlog_items:
+            if item["item_id"] == item_id:
+                allowed = {"title", "description", "priority", "story_points", "labels", "dependencies"}
+                for k, v in updates.items():
+                    if k in allowed:
+                        item[k] = v
+                log.info("discussion.modify_item item_id=%s", item_id)
+                return True
+        return False
+
+    return False
+
+
+def _apply_assignment_action(
+    event: "CommEvent",
+    assignments: dict[str, str],
+    working_items: list[str],
+    slots: list[_SlotSnap],
+) -> bool:
+    """Apply an assignment-context action. Returns True if state changed."""
+    content = event.content if isinstance(event.content, dict) else {}
+    action = event.task_type
+    sender_id = event.sender_id
+
+    if action == "volunteer":
+        item_id = content.get("item_id", "")
+        if not item_id or item_id not in working_items:
+            return False
+        # Only assign if unassigned; don't override existing
+        if item_id not in assignments:
+            assignments[item_id] = sender_id
+            log.info("discussion.volunteer item_id=%s participant_id=%s", item_id, sender_id)
+            return True
+        return False
+
+    elif action == "object":
+        item_id = content.get("item_id", "")
+        reason = content.get("reason", "")
+        if not item_id or item_id not in assignments:
+            return False
+        # Objection removes the assignment, putting it back for re-assignment
+        removed = assignments.pop(item_id, None)
+        if removed:
+            log.info("discussion.object item_id=%s by=%s reason=%s", item_id, sender_id, reason)
+            return True
+        return False
+
+    elif action == "reassign":
+        item_id = content.get("item_id", "")
+        to_participant_id = content.get("to_participant_id", "")
+        from_participant_id = content.get("from_participant_id", "")
+        if not item_id or not to_participant_id:
+            return False
+        if item_id not in working_items:
+            return False
+        # Validate to_participant is a valid slot
+        valid_pids = {s.participant_id for s in slots if s.participant_id}
+        if to_participant_id not in valid_pids:
+            return False
+        assignments[item_id] = to_participant_id
+        log.info(
+            "discussion.reassign item_id=%s from=%s to=%s",
+            item_id, from_participant_id, to_participant_id,
+        )
+        return True
+
+    return False
+
+
+async def _broadcast_discussion_state(
+    session: _SessionSnap,
+    context: str,
+    working_items: list[str],
+    assignments: dict[str, str],
+    backlog_items: list[dict],
+    round_count: int,
+) -> None:
+    """Broadcast current discussion state via comm bus (US-32 AC2, AC7)."""
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    if context == "recommendation":
+        item_details = [
+            next((it for it in backlog_items if it["item_id"] == iid), {"item_id": iid})
+            for iid in working_items
+        ]
+        payload: dict[str, Any] = {
+            "context": "recommendation",
+            "items": item_details,
+            "round": round_count,
+        }
+    else:
+        payload = {
+            "context": "assignment",
+            "assignments": assignments,
+            "round": round_count,
+        }
+
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session.id,
+        timestamp=_now_iso(),
+        sender_id="platform",
+        sender_name="Platform",
+        receiver_id=None,
+        receiver_name=None,
+        task_type="discussion_update",
+        message_kind="broadcast",
+        content=payload,
+    ))
+
+
+async def _handle_discussion(
+    session: _SessionSnap,
+    slots: list[_SlotSnap],
+    context: str,
+    allowed_actions: list[str],
+    timeout_seconds: int,
+    backlog_items: list[dict],
+    selected_items: list[str],
+    assignments: dict[str, str],
+    phase_id: str,
+    phase_name: str,
+    phase_history: list[dict],
+    human_messages: list[dict] | None = None,
+) -> tuple[list[str], dict[str, str], int]:
+    """Shared discussion handler for recommendation and assignment phases (US-32).
+
+    Returns (final_selected_items, final_assignments, round_count).
+    """
+    from app.a2a.models import CommEvent
+    from app.message_bus import bus
+
+    # Working copies
+    working_items: list[str] = list(selected_items)
+    working_assignments: dict[str, str] = dict(assignments)
+    round_count = 0
+
+    # Identify PO participants for advance signaling
+    po_pids: set[str] = {
+        s.participant_id for s in slots
+        if s.role == "PRODUCT_OWNER" and s.participant_id
+    }
+
+    # Broadcast initial state (AC2)
+    await _broadcast_discussion_state(
+        session, context, working_items, working_assignments,
+        backlog_items, round_count,
+    )
+
+    # Subscribe to session comm channel (AC3)
+    channel = f"session:comm:{session.id}"
+    pubsub = bus().pubsub()
+    await pubsub.subscribe(channel)
+
+    last_activity = asyncio.get_event_loop().time()
+    loop = asyncio.get_event_loop()
+
+    try:
+        while True:
+            # Check timeout with no activity (AC8a)
+            elapsed = loop.time() - last_activity
+            if elapsed >= timeout_seconds:
+                log.info(
+                    "discussion.timeout session_id=%s context=%s elapsed=%.1f",
+                    session.id, context, elapsed,
+                )
+                break
+
+            # Poll for messages with short timeout
+            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.5)
+            if msg is None:
+                continue
+
+            # Parse CommEvent (AC4)
+            try:
+                event = CommEvent.model_validate_json(msg["data"])
+            except Exception:
+                continue
+
+            # Check for PO advance signal (AC8c)
+            if (
+                event.sender_id in po_pids
+                and event.task_type in ("advance", "confirm_phase")
+            ):
+                log.info(
+                    "discussion.po_advance session_id=%s sender_id=%s",
+                    session.id, event.sender_id,
+                )
+                break
+
+            # Validate action against allowed set (AC4)
+            if event.task_type not in allowed_actions:
+                continue
+
+            # Apply the action (AC5, AC6)
+            changed = False
+            if context == "recommendation":
+                changed = _apply_recommendation_action(
+                    event, working_items, backlog_items,
+                )
+            elif context == "assignment":
+                changed = _apply_assignment_action(
+                    event, working_assignments, working_items, slots,
+                )
+
+            if changed:
+                round_count += 1
+                last_activity = loop.time()
+                # Broadcast updated state (AC7)
+                await _broadcast_discussion_state(
+                    session, context, working_items, working_assignments,
+                    backlog_items, round_count,
+                )
+
+    finally:
+        await pubsub.unsubscribe(channel)
+        # redis-py 5.x may require explicit close; guard against missing method
+        close_fn = getattr(pubsub, "aclose", getattr(pubsub, "close", None))
+        if close_fn is not None:
+            if callable(close_fn):
+                try:
+                    await close_fn()  # type: ignore[misc]
+                except Exception:
+                    pass
+
+    log.info(
+        "discussion.complete session_id=%s context=%s rounds=%d",
+        session.id, context, round_count,
+    )
+    return working_items, working_assignments, round_count
+
+
+# ── US-33: Recommend Handler ───────────────────────────────────────────────────
+
+
+async def _handle_recommend(
+    session: _SessionSnap,
+    slots: list[_SlotSnap],
+    backlog_items: list[dict],
+    phase_id: str,
+    phase_name: str,
+    phase_history: list[dict],
+    human_messages: list[dict] | None = None,
+    discussion_config: dict[str, Any] | None = None,
+) -> tuple[list[str], int]:
+    """Generate recommendations via recommender, then enter discussion (US-33 AC1).
+
+    Returns (final_selected_items, round_count).
+    """
+    from app.recommender import recommend
+
+    # If backlog_items is empty, fetch from PO first
+    if not backlog_items:
+        backlog_items_fetched = await _handle_present_items(
+            session, slots, phase_id, phase_name, {}, phase_history, human_messages,
+        )
+        backlog_items.extend(backlog_items_fetched)
+
+    # Determine total capacity
+    total_cap = session.sprint_capacity or sum(
+        int((it.get("story_points") or 1)) for it in backlog_items
+    )
+
+    # Run recommender
+    recommended = recommend(
+        backlog_items=backlog_items,
+        sprint_goal=session.sprint_goal,
+        total_capacity=total_cap,
+    )
+    rec_item_ids = [it["item_id"] for it in recommended]
+
+    log.info(
+        "orchestrator.recommend session_id=%s recommended=%d/%d",
+        session.id, len(rec_item_ids), len(backlog_items),
+    )
+
+    # Enter discussion if configured
+    disc_cfg = discussion_config or {}
+    if disc_cfg.get("allowed_actions"):
+        final_items, _, rounds = await _handle_discussion(
+            session=session,
+            slots=slots,
+            context="recommendation",
+            allowed_actions=disc_cfg["allowed_actions"],
+            timeout_seconds=disc_cfg.get("timeout_seconds", 60),
+            backlog_items=backlog_items,
+            selected_items=rec_item_ids,
+            assignments={},
+            phase_id=phase_id,
+            phase_name=phase_name,
+            phase_history=phase_history,
+            human_messages=human_messages,
+        )
+        return final_items, rounds
+
+    return rec_item_ids, 0
+
+
 async def _handle_confirm(
     session: _SessionSnap,
     slots: list[_SlotSnap],
@@ -842,7 +1183,44 @@ async def _handle_confirm(
     phase_name: str,
     phase_history: list[dict],
     human_messages: list[dict] | None = None,
+    *,
+    is_v2: bool = False,
 ) -> float:
+    """Confirm phase: v1 uses quorum, v2 polls only PRODUCT_OWNER (US-33 AC5)."""
+    if is_v2:
+        # v2: poll only PRODUCT_OWNER, no quorum needed
+        po_slots = _reachable_slots(slots, roles={"PRODUCT_OWNER"})
+        if not po_slots:
+            log.warning("orchestrator.confirm_v2.no_po session_id=%s", session.id)
+            return 1.0
+
+        ctx = _build_ctx(
+            session, slots, phase_id, phase_name, 1,
+            backlog_items, selected_items, assignments, phase_history, human_messages,
+        )
+        po = po_slots[0]
+        r = await _send_task_with_comm(
+            session.id, po, "confirm", ctx,
+            {
+                "sprint_goal": session.sprint_goal,
+                "selected_items": selected_items,
+                "assignments": assignments,
+            },
+        )
+        if not r.ok:
+            log.warning("orchestrator.confirm_v2.po_failed slot=%s", po.id)
+            return 0.0
+
+        artifact = r.artifact or {}
+        confirmed = bool(artifact.get("confirmed", artifact.get("ack", False)))
+        quorum = 1.0 if confirmed else 0.0
+        log.info(
+            "orchestrator.confirm_v2 session_id=%s po_confirmed=%s",
+            session.id, confirmed,
+        )
+        return quorum
+
+    # v1: existing quorum-based confirmation
     reachable = _reachable_slots(slots)
     total = len(reachable)
     if total == 0:
