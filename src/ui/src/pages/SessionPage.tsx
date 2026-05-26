@@ -245,6 +245,54 @@ export default function SessionPage() {
         );
       case "sprint_backlog":
         return <SprintBacklogView payload={pl} myParticipantId={participantId} />;
+      case "phase_started": {
+        // US-36: Route to appropriate view based on phase
+        const phase = (payload as any)?.phase as string | undefined;
+        if (phase === "recommendation") {
+          if (isV2 && session_id) {
+            return (
+              <RecommendationView
+                sessionId={session_id}
+                sessionCtx={ctx}
+                myParticipantId={participantId}
+                myName={
+                  sessionStorage.getItem(`name:${session_id}`) ?? undefined
+                }
+              />
+            );
+          }
+          return <BacklogView sessionCtx={ctx} />;
+        }
+        if (phase === "assignment") {
+          return (
+            <AssignView
+              taskId={task_id}
+              sessionCtx={ctx}
+              payload={pl}
+              onSubmit={handleSubmit}
+              submitted={submitted}
+              submittedArtifact={submittedArtifact}
+            />
+          );
+        }
+        if (phase === "confirmation") {
+          return (
+            <ConfirmView
+              taskId={task_id}
+              sessionCtx={ctx}
+              payload={pl}
+              onSubmit={handleSubmit}
+              submitted={submitted}
+              submittedArtifact={submittedArtifact}
+            />
+          );
+        }
+        return (
+          <div className="text-sm text-muted-foreground">
+            Phase: <code>{phase ?? "unknown"}</code>
+          </div>
+        );
+      }
       default:
         return (
           <div className="text-sm text-muted-foreground">
@@ -262,6 +310,7 @@ export default function SessionPage() {
     assign_opportunity: isV2 ? "Assignment Discussion" : "Assignment",
     confirm: isV2 ? "PO Confirmation" : "Confirmation",
     sprint_backlog: "Sprint Backlog",
+    phase_started: "Phase Update",
   };
 
   return (

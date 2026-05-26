@@ -330,6 +330,14 @@ async def _orchestrate(session_id: str) -> None:
                 assignments = await _handle_assign(session, slots, backlog_items or [], selected_items or [], assignments, phase_id, phase_name, phase_history, human_messages)
                 outcome = f"{len(assignments)} items assigned"
             elif action_type == "CONFIRM":
+                # US-36: Broadcast phase_started to HUMAN participants
+                await _broadcast_phase_started(
+                    session, slots, "confirmation",
+                    phase_id, phase_name,
+                    backlog_items, selected_items, assignments, phase_history,
+                    human_messages,
+                )
+
                 quorum = await _handle_confirm(
                     session, slots, backlog_items or [], selected_items or [],
                     assignments, phase_id, phase_name, phase_history, human_messages,
@@ -365,6 +373,14 @@ async def _orchestrate(session_id: str) -> None:
                             }
                         break
 
+                # US-36: Broadcast phase_started to HUMAN participants
+                await _broadcast_phase_started(
+                    session, slots, "recommendation",
+                    phase_id, phase_name,
+                    backlog_items, selected_items, assignments, phase_history,
+                    human_messages,
+                )
+
                 rec_items, rec_rounds = await _handle_recommend(
                     session, slots, backlog_items or [],
                     phase_id, phase_name, phase_history, human_messages,
@@ -380,6 +396,14 @@ async def _orchestrate(session_id: str) -> None:
                 if not is_v2:
                     log.warning("orchestrator.v2_action_in_v1 session_id=%s action=%s", session_id, action_type)
                     continue
+
+                # US-36: Broadcast phase_started to HUMAN participants
+                await _broadcast_phase_started(
+                    session, slots, "assignment",
+                    phase_id, phase_name,
+                    backlog_items, selected_items, assignments, phase_history,
+                    human_messages,
+                )
 
                 # Run expertise-based assignment
                 gen_assignments = await _handle_generate_assignment(
@@ -601,6 +625,57 @@ async def _broadcast_sprint_backlog(
             )
 
     await asyncio.gather(*[deliver(s) for s in all_joined], return_exceptions=True)
+
+
+# ── US-36: Phase Started Broadcast ─────────────────────────────────────────────
+
+
+async def _broadcast_phase_started(
+    session: _SessionSnap,
+    slots: list[_SlotSnap],
+    phase: str,
+    phase_id: str,
+    phase_name: str,
+    backlog_items: list[dict] | None,
+    selected_items: list[str] | None,
+    assignments: dict[str, str],
+    phase_history: list[dict],
+    human_messages: list[dict] | None = None,
+) -> None:
+    """Broadcast a phase_started A2A task to all HUMAN participants so the UI
+    knows which phase is active during discussion-driven phases (US-36)."""
+    human_slots = [
+        s for s in slots
+        if s.slot_type == "HUMAN" and s.status == "joined" and s.endpoint
+    ]
+    if not human_slots:
+        return
+
+    ctx = _build_ctx(
+        session, slots, phase_id, phase_name, 1,
+        backlog_items, selected_items, assignments, phase_history, human_messages,
+    )
+
+    payload: dict[str, Any] = {"phase": phase}
+    if phase == "recommendation":
+        payload["sprint_goal"] = session.sprint_goal
+
+    async def notify(slot: _SlotSnap) -> None:
+        try:
+            await _send_task_with_comm(
+                session.id, slot, "phase_started", ctx, payload,
+            )
+            log.info(
+                "phase_started.delivered session_id=%s slot=%s phase=%s",
+                session.id, slot.id, phase,
+            )
+        except Exception as exc:
+            log.warning(
+                "phase_started.delivery_failed session_id=%s slot=%s exc=%s",
+                session.id, slot.id, exc,
+            )
+
+    await asyncio.gather(*[notify(s) for s in human_slots], return_exceptions=True)
 
 
 # ── Action Handlers ─────────────────────────────────────────────────────────────
