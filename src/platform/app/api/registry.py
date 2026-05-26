@@ -158,6 +158,14 @@ async def register(
     role: str = card["role"]
     capabilities: dict = card["capabilities"]
 
+    # US-34: extract capacity from Agent Card, default to 0/empty (AC6).
+    capacity = capabilities.get("capacity", {})
+    if not isinstance(capacity, dict):
+        capacity = {}
+    capacity.setdefault("story_points", 0)
+    capacity.setdefault("specialties", [])
+    capabilities["capacity"] = capacity
+
     # AC7: idempotent — if the same endpoint is already registered, return the
     # existing participant_id rather than creating a duplicate.
     existing = await db.execute(select(Participant).where(Participant.endpoint == endpoint))

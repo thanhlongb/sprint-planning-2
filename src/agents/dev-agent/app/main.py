@@ -18,6 +18,14 @@ AGENT_PUBLIC_URL = os.environ.get("AGENT_PUBLIC_URL", "http://localhost:8002")
 # Maximum items this agent will accept in a single session (AC4).
 MAX_ASSIGNMENTS = int(os.environ.get("MAX_ASSIGNMENTS", "2"))
 
+# Capacity configuration (US-34).
+AGENT_CAPACITY_SP = int(os.environ.get("AGENT_CAPACITY_SP", "0"))
+AGENT_SPECIALTIES: list[str] = [
+    s.strip()
+    for s in os.environ.get("AGENT_SPECIALTIES", "").split(",")
+    if s.strip()
+]
+
 # Declared auth scheme — validated on every inbound task call.
 _AUTH_SCHEME = "none"
 
@@ -46,6 +54,10 @@ async def agent_card() -> dict:
         "capabilities": {
             "can_vote": True,
             "can_volunteer": True,
+            "capacity": {
+                "story_points": AGENT_CAPACITY_SP,
+                "specialties": AGENT_SPECIALTIES,
+            },
         },
         "endpoint": f"{AGENT_PUBLIC_URL}/a2a",
         "auth": {"scheme": _AUTH_SCHEME},

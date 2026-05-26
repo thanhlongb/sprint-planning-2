@@ -71,6 +71,8 @@ services:
       AGENT_ROLE: DEVELOPER
       AGENT_PUBLIC_URL: http://dev-agent:8002
       PLATFORM_URL: http://platform:8000
+      AGENT_CAPACITY_SP: "20"
+      AGENT_SPECIALTIES: "backend,API,Python"
     ports:
       - "8002:8002"
     depends_on:
@@ -108,6 +110,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       PERSONA_SPECIALTIES: backend,API,Python
       PERSONA_SENIORITY: senior
+      AGENT_CAPACITY_SP: "15"
+      AGENT_SPECIALTIES: "frontend,React,TypeScript"
     ports:
       - "8012:8012"
     depends_on:
