@@ -71,7 +71,7 @@ services:
       AGENT_ROLE: DEVELOPER
       AGENT_PUBLIC_URL: http://dev-agent:8002
       PLATFORM_URL: http://platform:8000
-      AGENT_CAPACITY_SP: "60"
+      AGENT_CAPACITY_SP: "90"
       AGENT_SPECIALTIES: "backend,API,Python"
     ports:
       - "8002:8002"
