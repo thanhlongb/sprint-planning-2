@@ -187,6 +187,11 @@ async def register(
         db.add(participant)
         await db.commit()
         await db.refresh(participant)
+    else:
+        # Update capabilities on re-registration (e.g. capacity changed)
+        participant.capabilities = capabilities
+        await db.commit()
+        await db.refresh(participant)
 
     # AC4: return participant_id + status.
     return RegisterResponse(participant_id=participant.id)
