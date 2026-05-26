@@ -46,3 +46,4 @@ Stories are derived from the roadmap in [design-doc.md §14](../design-doc.md). 
 - [US-36: Agent Contract Changes for v2](US-36-agent-contract-v2.md)
 - [US-37: Template Schema Updates for v2](US-37-template-schema-v2.md)
 - [US-38: End-to-End Test for v2 Workflow](US-38-e2e-test-v2.md)
+- [US-39: v2 Workflow UI — Discussion-Driven Views](US-39-v2-ui-discussion-views.md)
