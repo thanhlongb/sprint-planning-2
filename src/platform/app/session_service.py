@@ -119,6 +119,36 @@ async def send_invites_background(session_id: str, slots: list[SessionParticipan
     await asyncio.gather(*[invite(s) for s in agent_slots_data], return_exceptions=True)
 
 
+async def _compute_sprint_capacity(
+    session_id: str,
+    slots: list[SessionParticipant],
+    db: AsyncSession,
+) -> int:
+    """Sum story-point capacity from all joined participants.
+
+    Agent slots use their registered capacity from the Participant table.
+    Human slots default to HUMAN_CAPACITY_SP (20) when no Agent Card is present.
+    """
+    from app.api.registry import HUMAN_CAPACITY_SP  # noqa: PLC0415
+
+    total = 0
+    for slot in slots:
+        if slot.status != "joined":
+            continue
+        if slot.slot_type == "AGENT" and slot.participant_id:
+            p_result = await db.execute(
+                select(Participant).where(Participant.id == slot.participant_id)
+            )
+            p = p_result.scalar_one_or_none()
+            if p:
+                cap_raw = (p.capabilities or {}).get("capacity", {})
+                if isinstance(cap_raw, dict):
+                    total += int(cap_raw.get("story_points", 0))
+        elif slot.slot_type == "HUMAN":
+            total += HUMAN_CAPACITY_SP
+    return total
+
+
 # ── Timeout evaluation ────────────────────────────────────────────────────────
 
 
@@ -165,6 +195,15 @@ async def _evaluate_timeout(session_id: str) -> None:
             ctx = session.context or {}
             if note:
                 ctx["absent_note"] = note
+
+            # Compute sprint_capacity from participant capacities
+            sprint_cap = await _compute_sprint_capacity(session_id, slots, db)
+            ctx["sprint_capacity"] = sprint_cap
+            log.info(
+                "session.sprint_capacity session_id=%s sprint_capacity=%d",
+                session_id, sprint_cap,
+            )
+
             session.context = ctx
             await _transition(session, "ACTIVE", db)
             await db.commit()
@@ -219,6 +258,17 @@ async def maybe_activate(session_id: str, db: AsyncSession) -> bool:
         return False
 
     _timeout_tasks.pop(session_id, None)
+
+    # Compute sprint_capacity from participant capacities
+    sprint_cap = await _compute_sprint_capacity(session_id, slots, db)
+    ctx = session.context or {}
+    ctx["sprint_capacity"] = sprint_cap
+    session.context = ctx
+    log.info(
+        "session.sprint_capacity session_id=%s sprint_capacity=%d",
+        session_id, sprint_cap,
+    )
+
     await _transition(session, "ACTIVE", db)
     await db.commit()
     log.info("session.active_all_joined session_id=%s", session_id)

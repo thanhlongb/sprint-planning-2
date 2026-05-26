@@ -40,6 +40,12 @@ _ROLE_REQUIRED_DECLARED: dict[str, set[str]] = {
 
 VALID_AUTH_SCHEMES = {"none", "bearer"}
 
+# ── Capacity defaults ─────────────────────────────────────────────────────────
+
+# Human participants default to 20 story points when they join a session
+# without an explicit capacity declaration (no Agent Card).
+HUMAN_CAPACITY_SP = 20
+
 # ── Validation helpers ────────────────────────────────────────────────────────
 
 def _validate_card(card: dict[str, Any]) -> None:

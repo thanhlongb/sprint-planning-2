@@ -397,7 +397,7 @@ def run_e2e_test(standup: bool = True, teardown: bool = True) -> bool:
         inject_add_item(r, session_id)
         time.sleep(0.5)
         # Remove a low-priority item to exercise remove_item
-        inject_remove_item(r, session_id, "PO-6")  # "Audit log export" — LOW
+        inject_remove_item(r, session_id, "T-092")  # "Fix inconsistent button styling" — LOW
         time.sleep(0.5)
         # Add one more item to bump rounds further
         publish_comm_event(
