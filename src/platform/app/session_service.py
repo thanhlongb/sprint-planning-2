@@ -243,7 +243,11 @@ def schedule_timeout(session_id: str, timeout_at: datetime) -> None:
 
 
 async def maybe_activate(session_id: str, db: AsyncSession) -> bool:
-    """Transition to ACTIVE immediately if all declared slots have joined."""
+    """Transition to ACTIVE immediately if all declared slots have joined.
+
+    Retries once after a short delay to handle concurrent auto-joins from
+    multiple agents arriving in separate transactions (race condition fix).
+    """
     result = await db.execute(select(Session).where(Session.id == session_id))
     session = result.scalar_one_or_none()
     if session is None or session.status != "PENDING":
@@ -255,25 +259,47 @@ async def maybe_activate(session_id: str, db: AsyncSession) -> bool:
     slots = list(slots_result.scalars())
     all_joined = all(s.status == "joined" for s in slots)
     if not all_joined:
-        return False
+        # Commit this join so the other concurrent join can see it,
+        # then retry once after a brief delay.
+        await db.commit()
+        await asyncio.sleep(0.3)
+        # Re-query with a fresh transaction
+        async with SessionLocal() as db2:
+            result2 = await db2.execute(select(Session).where(Session.id == session_id))
+            session2 = result2.scalar_one_or_none()
+            if session2 is None or session2.status != "PENDING":
+                return False
+            slots_result2 = await db2.execute(
+                select(SessionParticipant).where(SessionParticipant.session_id == session_id)
+            )
+            slots2 = list(slots_result2.scalars())
+            if not all(s.status == "joined" for s in slots2):
+                return False
+            # Use the fresh session for activation
+            return await _do_activate(session2, slots2, db2)
+    
+    return await _do_activate(session, slots, db)
 
-    _timeout_tasks.pop(session_id, None)
 
-    # Compute sprint_capacity from participant capacities
-    sprint_cap = await _compute_sprint_capacity(session_id, slots, db)
+async def _do_activate(
+    session: Session, slots: list[SessionParticipant], db: AsyncSession
+) -> bool:
+    _timeout_tasks.pop(session.id, None)
+
+    sprint_cap = await _compute_sprint_capacity(session.id, slots, db)
     ctx = session.context or {}
     ctx["sprint_capacity"] = sprint_cap
     session.context = ctx
     log.info(
         "session.sprint_capacity session_id=%s sprint_capacity=%d",
-        session_id, sprint_cap,
+        session.id, sprint_cap,
     )
 
     await _transition(session, "ACTIVE", db)
     await db.commit()
-    log.info("session.active_all_joined session_id=%s", session_id)
+    log.info("session.active_all_joined session_id=%s", session.id)
     await _broadcast_ready(session, slots, note=None)
-    asyncio.create_task(_get_run_orchestrator()(session_id))
+    asyncio.create_task(_get_run_orchestrator()(session.id))
     return True
 
 

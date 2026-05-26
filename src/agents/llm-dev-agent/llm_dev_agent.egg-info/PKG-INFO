@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: llm-dev-agent
+Version: 0.1.0
+Summary: LLM-Backed A2A Remote Agent -- DEVELOPER role (US-25)
+Requires-Python: >=3.12
+Requires-Dist: fastapi>=0.115
+Requires-Dist: uvicorn[standard]>=0.30
+Requires-Dist: pydantic>=2.8
+Requires-Dist: httpx>=0.27
