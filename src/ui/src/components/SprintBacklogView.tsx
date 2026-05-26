@@ -27,6 +27,11 @@ interface Props {
     sprint_goal?: string;
     selected_items?: BacklogItem[];
     capacity_plan?: CapacityPlanItem[];
+    convergence_metrics?: {
+      recommendation_rounds?: number;
+      assignment_rounds?: number;
+      retention_pct?: number;
+    };
   };
   myParticipantId?: string;
 }
@@ -38,7 +43,7 @@ const priorityVariant: Record<string, "default" | "secondary" | "outline"> = {
 };
 
 export default function SprintBacklogView({ payload, myParticipantId }: Props) {
-  const { sprint_goal, selected_items = [], capacity_plan = [] } = payload;
+  const { sprint_goal, selected_items = [], capacity_plan = [], convergence_metrics } = payload;
 
   const totalSP = capacity_plan.reduce((acc, curr) => acc + (curr.total_story_points || 0), 0);
 
@@ -153,6 +158,43 @@ export default function SprintBacklogView({ payload, myParticipantId }: Props) {
           <span>Total Assigned:</span>
           <span className="font-medium text-foreground">{selected_items.length} items ({totalSP} SP)</span>
         </div>
+
+        {/* Convergence metrics (v2 sessions) */}
+        {convergence_metrics && (
+          <div className="pt-4 border-t space-y-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Convergence Metrics
+            </h4>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="bg-muted/20 rounded p-2">
+                <p className="text-lg font-bold">
+                  {convergence_metrics.recommendation_rounds ?? "—"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  Recommendation Rounds
+                </p>
+              </div>
+              <div className="bg-muted/20 rounded p-2">
+                <p className="text-lg font-bold">
+                  {convergence_metrics.assignment_rounds ?? "—"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  Assignment Rounds
+                </p>
+              </div>
+              <div className="bg-muted/20 rounded p-2">
+                <p className="text-lg font-bold">
+                  {convergence_metrics.retention_pct != null
+                    ? `${convergence_metrics.retention_pct}%`
+                    : "—"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  Retention
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

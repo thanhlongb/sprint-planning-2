@@ -755,6 +755,55 @@ async def get_session_summary(
     }
 
 
+# ── POST /sessions/{session_id}/discussion-action — US-39 v2 discussion ──────
+
+
+class DiscussionActionRequest(BaseModel):
+    session_id: str
+    sender_id: str
+    sender_name: str
+    action: str  # add_item, remove_item, modify_item, volunteer, object, reassign
+    content: dict[str, Any]
+
+
+@router.post("/{session_id}/discussion-action")
+async def discussion_action(
+    session_id: str,
+    body: DiscussionActionRequest,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    result = await db.execute(select(Session).where(Session.id == session_id))
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(404, detail={"reason": "session_not_found"})
+    if session.status != "ACTIVE":
+        raise HTTPException(409, detail={"reason": "session_not_active", "status": session.status})
+
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session_id,
+        timestamp=timestamp,
+        sender_id=body.sender_id,
+        sender_name=body.sender_name,
+        receiver_id=None,
+        receiver_name=None,
+        task_type=body.action,
+        message_kind="discussion_action",
+        content=body.content,
+    ))
+
+    log.info(
+        "discussion_action.published session_id=%s action=%s sender=%s",
+        session_id, body.action, body.sender_name,
+    )
+    return {"ok": True, "action": body.action}
+
+
 # ── GET /sessions/{session_id}/comm-feed — US-26 communication feed SSE ───────
 
 

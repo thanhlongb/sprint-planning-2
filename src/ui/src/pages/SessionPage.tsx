@@ -20,6 +20,7 @@ import VoteView from "@/components/VoteView";
 import AssignView from "@/components/AssignView";
 import ConfirmView from "@/components/ConfirmView";
 import SprintBacklogView from "@/components/SprintBacklogView";
+import RecommendationView from "@/components/RecommendationView";
 
 interface TaskEnvelope {
   task_id: string;
@@ -44,6 +45,9 @@ export default function SessionPage() {
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState(false);
   const sseRef = useRef<EventSource | null>(null);
+
+  // Track template version from session context
+  const [templateVersion, setTemplateVersion] = useState<string>("v1");
 
   useEffect(() => {
     if (!session_id) return;
@@ -104,6 +108,14 @@ export default function SessionPage() {
         if (envelope.session_ctx?.participants) {
           setParticipants(envelope.session_ctx.participants as any[]);
         }
+
+        // Detect v2 template from session context
+        const tpl =
+          envelope.session_ctx?.template_id ??
+          envelope.session_ctx?.template;
+        if (typeof tpl === "string" && tpl.includes("v2")) {
+          setTemplateVersion("v2");
+        }
       } catch {
         // Ignore malformed frames
       }
@@ -156,6 +168,8 @@ export default function SessionPage() {
     }
   }
 
+  const isV2 = templateVersion === "v2";
+
   // Render the appropriate component per task type (AC4)
   function renderTask(active: ActiveTask) {
     const { envelope, submitted, submittedArtifact } = active;
@@ -170,8 +184,34 @@ export default function SessionPage() {
       case "session_ready":
         return <ReadyView sessionCtx={ctx} />;
       case "present_backlog":
+        // v2: route to RecommendationView for discussion-driven recommendation
+        if (isV2 && session_id) {
+          return (
+            <RecommendationView
+              sessionId={session_id}
+              sessionCtx={ctx}
+              myParticipantId={participantId}
+              myName={
+                sessionStorage.getItem(`name:${session_id}`) ?? undefined
+              }
+            />
+          );
+        }
         return <BacklogView sessionCtx={ctx} />;
       case "vote":
+        // v2: replaced by RecommendationView — if a vote task arrives in v2, show recommendation
+        if (isV2 && session_id) {
+          return (
+            <RecommendationView
+              sessionId={session_id}
+              sessionCtx={ctx}
+              myParticipantId={participantId}
+              myName={
+                sessionStorage.getItem(`name:${session_id}`) ?? undefined
+              }
+            />
+          );
+        }
         return (
           <VoteView
             taskId={task_id}
@@ -217,10 +257,10 @@ export default function SessionPage() {
   const phaseLabel: Record<string, string> = {
     session_invite: "Lobby",
     session_ready: "Session Starting",
-    present_backlog: "Backlog Presentation",
-    vote: "Prioritisation",
-    assign_opportunity: "Assignment",
-    confirm: "Confirmation",
+    present_backlog: isV2 ? "Goal-Aligned Recommendation" : "Backlog Presentation",
+    vote: isV2 ? "Discuss & Refine" : "Prioritisation",
+    assign_opportunity: isV2 ? "Assignment Discussion" : "Assignment",
+    confirm: isV2 ? "PO Confirmation" : "Confirmation",
     sprint_backlog: "Sprint Backlog",
   };
 

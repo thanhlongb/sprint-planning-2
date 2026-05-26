@@ -23,7 +23,7 @@ export interface CommEvent {
   receiver_id: string | null;
   receiver_name: string | null;
   task_type: string;
-  message_kind: "task_request" | "task_response" | "thought" | "human_message";
+  message_kind: "task_request" | "task_response" | "thought" | "human_message" | "discussion_action" | "broadcast" | "chat" | "agent_chat" | "agent_reply";
   content: Record<string, unknown> | string;
 }
 
@@ -65,15 +65,22 @@ const KIND_LABELS: Record<string, string> = {
   task_response: "Response",
   thought:       "Thought",
   human_message: "Message",
+  discussion_action: "Action",
+  broadcast:     "Update",
+  chat:          "Chat",
+  agent_chat:    "Agent",
 };
 
-// Phases in which the composer is enabled (AC7)
+// Phases in which the composer is enabled (AC7) — includes v2 phases
 const ACTIVE_PHASES = new Set([
   "session_ready",
   "present_backlog",
   "vote",
   "assign_opportunity",
   "confirm",
+  "recommendation_phase",
+  "assignment_phase",
+  "confirmation_phase",
 ]);
 
 const TASK_TYPE_LABELS: Record<string, string> = {
@@ -83,6 +90,15 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   acknowledge_assignment: "Acknowledge",
   confirm:              "Confirm",
   sprint_backlog:       "Sprint Backlog",
+  discussion_update:    "Discussion Update",
+  add_item:             "Add Item",
+  remove_item:          "Remove Item",
+  modify_item:          "Modify Item",
+  volunteer:            "Volunteer",
+  object:               "Objection",
+  reassign:             "Reassign",
+  recommendation_phase: "Recommendation",
+  assignment_phase:     "Assignment Discussion",
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -94,7 +110,7 @@ function getRoleForName(name: string, participants: Participant[]): string {
 
 function summariseContent(
   taskType: string,
-  kind: "task_request" | "task_response" | "thought" | "human_message",
+  kind: "task_request" | "task_response" | "thought" | "human_message" | "discussion_action" | "broadcast" | "chat" | "agent_chat" | "agent_reply",
   content: Record<string, unknown> | string,
 ): string {
   if (kind === "human_message") {
@@ -105,9 +121,44 @@ function summariseContent(
   if (kind === "thought") {
     return typeof content === "string" ? content : JSON.stringify(content);
   }
+
+  // Handle discussion actions and broadcast updates (v2)
   const c = typeof content === "object" && content !== null
     ? (content as Record<string, unknown>)
     : {};
+  const action = taskType;
+
+  // discussion_update broadcasts
+  if (action === "discussion_update") {
+    const ctx = c.context as string;
+    if (ctx === "recommendation") {
+      const items = c.items as unknown[];
+      return `Recommendation update: ${items?.length ?? 0} items (round ${c.round})`;
+    }
+    if (ctx === "assignment") {
+      const asgn = c.assignments as Record<string, unknown>;
+      return `Assignment update: ${Object.keys(asgn ?? {}).length} assignments (round ${c.round})`;
+    }
+    return `Discussion state update (${ctx})`;
+  }
+
+  // discussion actions
+  switch (action) {
+    case "add_item": {
+      const item = (c.item as Record<string, unknown>) ?? c;
+      return `Add item: "${item.title ?? c.item_id}"`;
+    }
+    case "remove_item":
+      return `Remove item: "${c.item_id}"`;
+    case "modify_item":
+      return `Modify item: "${c.item_id}" — ${JSON.stringify(c.updates)}`;
+    case "volunteer":
+      return `Volunteer for "${c.item_id}"`;
+    case "object":
+      return `Objected to assignment of "${c.item_id}": ${c.reason ?? ""}`;
+    case "reassign":
+      return `Reassigned "${c.item_id}" to ${c.to_participant_id}`;
+  }
 
   if (kind === "task_request") {
     switch (taskType) {
@@ -363,7 +414,7 @@ export function CommunicationFeed({
               ))}
             </select>
             <div className="flex gap-1 flex-wrap">
-              {(["all", "task_request", "task_response", "thought", "human_message"] as const).map((k) => (
+              {(["all", "task_request", "task_response", "thought", "human_message", "discussion_action", "broadcast"] as const).map((k) => (
                 <button
                   key={k}
                   onClick={() => setFilterKind(k)}

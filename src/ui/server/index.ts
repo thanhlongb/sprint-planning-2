@@ -313,6 +313,32 @@ app.post("/proxy/human-message", async (c) => {
   }
 });
 
+// ── POST /proxy/discussion-action — relay US-39 v2 discussion actions ──────
+
+app.post("/proxy/discussion-action", async (c) => {
+  const body = await c.req.json<{
+    session_id: string;
+    sender_id: string;
+    sender_name: string;
+    action: string;
+    content: Record<string, unknown>;
+  }>();
+  try {
+    const resp = await fetch(
+      `${PLATFORM_URL}/sessions/${body.session_id}/discussion-action`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+    const data = await resp.json();
+    return c.json(data, resp.status as any);
+  } catch {
+    return c.json({ error: "platform unreachable" }, 502);
+  }
+});
+
 // ── GET /proxy/comm-feed — relay US-26 comm-feed SSE from platform ────────────
 
 app.get("/proxy/comm-feed", async (c) => {
