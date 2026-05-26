@@ -88,6 +88,7 @@ class SessionOut(BaseModel):
 
 class SessionDetailOut(SessionOut):
     participants: list[dict[str, Any]] = Field(default_factory=list)
+    context: dict[str, Any] | None = Field(default=None)
 
 
 class JoinByParticipantId(BaseModel):
@@ -384,6 +385,7 @@ async def get_session_detail(
             }
             for s in slots
         ],
+        context=session.context,
     )
 
 
