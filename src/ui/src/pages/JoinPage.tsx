@@ -97,7 +97,11 @@ export default function JoinPage() {
       // Store participant_id and name for this session
       sessionStorage.setItem(`pid:${session_id}`, data.participant_id);
       sessionStorage.setItem(`name:${session_id}`, selectedName);
-      navigate(`/session/${session_id}`);
+
+      // Route to v2 chat-centric page if template is v2, otherwise v1 session page
+      const isV2 =
+        typeof session?.template === "string" && session.template.includes("v2");
+      navigate(isV2 ? `/chat/${session_id}` : `/session/${session_id}`);
     } catch {
       setError("Network error — could not join session");
     } finally {
