@@ -47,3 +47,4 @@ Stories are derived from the roadmap in [design-doc.md §14](../design-doc.md). 
 - [US-37: Template Schema Updates for v2](US-37-template-schema-v2.md)
 - [US-38: End-to-End Test for v2 Workflow](US-38-e2e-test-v2.md)
 - [US-39: v2 Workflow UI — Discussion-Driven Views](US-39-v2-ui-discussion-views.md)
+- [US-40: Chat-Centric UI — Discussion as the Core Interaction](US-40-chat-centric-ui-refactor.md)
