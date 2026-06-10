@@ -380,49 +380,19 @@ def run_e2e_test(standup: bool = True, teardown: bool = True) -> bool:
                 f"At least 2 participants joined ({len(active.get('participants', []))})",
             )
 
-        # ── 5. Inject discussion messages ─────────────────────────────────
-        # The platform has started the orchestrator, which will soon enter
-        # the recommendation discussion phase.  We connect to Redis and
-        # publish add_item / remove_item events so that recommendation_rounds
-        # becomes >= 1 (required by the spec).
-        print("\n[5/7] Injecting discussion messages via Redis comm bus...")
-        # Parse redis URL to extract host/port
-        redis_host = os.environ.get("REDIS_HOST", "localhost")
-        redis_port = int(os.environ.get("REDIS_PORT", "6379"))
-        r = redis.Redis(host=redis_host, port=redis_port, db=0)
-
-        # Wait a bit for the orchestrator to enter the discussion phase,
-        # then inject messages.
-        time.sleep(8)  # give recommender + discussion start time
-        inject_add_item(r, session_id)
-        time.sleep(0.5)
-        # Remove a low-priority item to exercise remove_item
-        inject_remove_item(r, session_id, "T-092")  # "Fix inconsistent button styling" — LOW
-        time.sleep(0.5)
-        # Add one more item to bump rounds further
-        publish_comm_event(
-            r,
-            session_id,
-            task_type="add_item",
-            content={
-                "item": {
-                    "item_id": "E2E-ADD-2",
-                    "title": "E2E test item — password reset flow",
-                    "description": "Self-service password reset via email.",
-                    "priority": "HIGH",
-                    "story_points": 3,
-                    "labels": ["auth", "email"],
-                    "dependencies": [],
-                },
-            },
-        )
+        # ── 5. Round-robin agents auto-respond to your_turn ──────────────────
+        # The platform now sends your_turn tasks sequentially to each agent.
+        # Reference agents handle your_turn and return done=True after round 0,
+        # so consensus is reached quickly.  No manual Redis injection needed.
+        print("\n[5/7] Round-robin discussion in progress (agents responding to your_turn)...")
 
         # ── 6. Wait for COMPLETED ─────────────────────────────────────────
-        print("\n[6/7] Waiting for session to complete (discussion timeouts ~120s)...")
+        print("\n[6/7] Waiting for session to complete...")
         with httpx.Client() as client:
-            # The discussion phases have 60s timeout each, so the full
-            # orchestrator run (rec + 60s disc + assign + 60s disc + confirm)
-            # takes ~130s total.  We give a generous 300s timeout.
+            # Round-robin: each round sends your_turn to 2 agents (PO + DEV),
+            # each with 30s timeout. Reference agents reply immediately and
+            # mark done=True after round 0, so consensus is fast (~5-10s per
+            # discussion phase). 300s timeout is generous.
             completed = wait_for_status(client, session_id, "COMPLETED", timeout=300)
 
         # ── 7. Verify outputs ─────────────────────────────────────────────

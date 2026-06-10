@@ -182,6 +182,9 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
     if task.task_type == "direct_message":
         return await _handle_direct_message(task)
 
+    if task.task_type == "your_turn":
+        return _handle_your_turn(task)
+
     raise HTTPException(400, f"Unsupported task type: {task.task_type!r}")
 
 
@@ -433,6 +436,22 @@ async def _handle_direct_message(task: Task) -> dict:
         asyncio.create_task(_post_agent_message(session_id, own_id, reply))
 
     return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
+
+
+# ── Your-turn handler (US-41: Round-Robin) ────────────────────────────────────
+
+
+def _handle_your_turn(task: Task) -> dict:
+    """Stub: LLM-based round-robin reasoning not yet implemented.
+
+    Always returns done=True — the LLM PO agent treats round-robin turns
+    as informational and defers to the reference PO agent for proposals.
+    """
+    return {
+        "task_id": task.task_id,
+        "status": "completed",
+        "artifact": {"message": "", "actions": [], "done": True},
+    }
 
 
 # ── confirm (sync) ────────────────────────────────────────────────────────────

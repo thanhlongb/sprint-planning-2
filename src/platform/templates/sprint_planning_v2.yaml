@@ -6,7 +6,7 @@ ProcessTemplate:
   phases:
     - phase_id: "recommendation"
       name: "Goal-Aligned Recommendation & Refinement"
-      description: "Platform generates initial task group, then participants discuss and refine"
+      description: "Platform generates initial task group, then round-robin discussion refines via consensus"
       required_roles: ["PRODUCT_OWNER", "DEVELOPER"]
       actions:
         - type: GENERATE_RECOMMENDATION
@@ -14,13 +14,15 @@ ProcessTemplate:
         - type: OPEN_DISCUSSION
           context: recommendation
           allowed_actions: [add_item, remove_item, modify_item]
-          timeout_seconds: 60
-      turn_order: FACILITATOR_LED
-      transition: MANUAL
+          turn_timeout_seconds: 30
+          max_rounds: 5
+          synthesize_proposals: true
+      turn_order: ROUND_ROBIN
+      transition: AUTO
 
     - phase_id: "assignment"
       name: "Task Assignment"
-      description: "Platform proposes expertise-based assignments, team discusses and negotiates"
+      description: "Platform proposes expertise-based assignments, round-robin discussion for negotiation"
       required_roles: ["DEVELOPER"]
       actions:
         - type: GENERATE_ASSIGNMENT
@@ -30,9 +32,11 @@ ProcessTemplate:
           allowed_actions: [volunteer, object, reassign]
           strategy: VOLUNTEER_FIRST
           fallback: AUTO_BALANCE
-          timeout_seconds: 60
-      turn_order: FACILITATOR_LED
-      transition: MANUAL
+          turn_timeout_seconds: 30
+          max_rounds: 5
+          synthesize_proposals: false
+      turn_order: ROUND_ROBIN
+      transition: AUTO
 
     - phase_id: "confirmation"
       name: "PO Confirmation"

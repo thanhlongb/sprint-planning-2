@@ -146,6 +146,9 @@ async def receive_task(task: Task, request: Request) -> dict:
     if task.task_type == "assignment_proposal":
         return _handle_assignment_proposal(task)
 
+    if task.task_type == "your_turn":
+        return _handle_your_turn(task)
+
     raise HTTPException(400, f"Unsupported task type: {task.task_type}")
 
 
@@ -205,7 +208,84 @@ def _handle_recommendation_update(task: Task) -> dict:
     return {"task_id": task.task_id, "status": "completed", "artifact": {"ack": True}}
 
 
-# ── Assignment-proposal handler (US-36 AC3) ───────────────────────────────────
+# ── Your-turn handler (US-41: Round-Robin) ────────────────────────────────────
+
+
+def _handle_your_turn(task: Task) -> dict:
+    """Respond to round-robin your_turn request.
+
+    Strategy:
+      - Round 0, recommendation context: suggest removing items with labels
+        not matching this agent's specialties.
+      - Round 0, assignment context: volunteer for unassigned items matching
+        specialties, object to mismatched assignments.
+      - Round 1+: always done.
+    """
+    round_num = task.payload.get("round", 0)
+    context = task.payload.get("context", "")
+
+    if round_num > 0:
+        return {
+            "task_id": task.task_id,
+            "status": "completed",
+            "artifact": {"message": "", "actions": [], "done": True},
+        }
+
+    actions: list[dict] = []
+    my_specialties: set[str] = set(AGENT_SPECIALTIES)
+    current_items: list[dict] = task.payload.get("current_items", [])
+    assignments: dict[str, str] = task.payload.get("assignments", {})
+    own_id = _own_participant_id(task.session_ctx)
+
+    if context == "recommendation" and my_specialties:
+        # Suggest removing items whose labels don't match our expertise
+        for item in current_items:
+            labels: set[str] = set(item.get("labels", []))
+            if labels and not labels & my_specialties:
+                actions.append({
+                    "type": "remove_item",
+                    "item_id": item["item_id"],
+                })
+
+    elif context == "assignment" and own_id:
+        # Volunteer for unassigned items matching our specialties
+        backlog_items: list[dict] = task.session_ctx.get("backlog_items") or []
+        item_map = {it["item_id"]: it for it in backlog_items if "item_id" in it}
+
+        for item_id, assignee in assignments.items():
+            # Object to items assigned to us that don't match specialties
+            if assignee == own_id:
+                item = item_map.get(item_id, {})
+                labels = set(item.get("labels", []))
+                if my_specialties and not labels & my_specialties:
+                    actions.append({
+                        "type": "object",
+                        "item_id": item_id,
+                        "reason": "Specialty mismatch",
+                    })
+
+            # Volunteer for unassigned items matching specialties
+            if not assignee:
+                item = item_map.get(item_id, {})
+                labels = set(item.get("labels", []))
+                if my_specialties and labels & my_specialties:
+                    actions.append({
+                        "type": "volunteer",
+                        "item_id": item_id,
+                    })
+
+    done = len(actions) == 0
+
+    return {
+        "task_id": task.task_id,
+        "status": "completed",
+        "artifact": {
+            "message": f"Proposing {len(actions)} changes." if actions else "Looks good to me.",
+            "actions": actions,
+            "done": done,
+        },
+    }
+
 
 
 def _handle_assignment_proposal(task: Task) -> dict:

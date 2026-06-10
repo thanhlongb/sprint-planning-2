@@ -57,6 +57,10 @@ class OpenDiscussionAction(ActionBase):
     timeout_seconds: int | None = None
     strategy: str | None = None
     fallback: str | None = None
+    # ── Round-robin config (used when phase turn_order == ROUND_ROBIN) ──
+    turn_timeout_seconds: int | None = None   # per-participant turn timeout (default 30)
+    max_rounds: int | None = None             # max discussion rounds (default 5)
+    synthesize_proposals: bool | None = None  # platform proposes new items after each round
 
 
 Action = (

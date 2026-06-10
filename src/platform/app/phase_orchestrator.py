@@ -304,7 +304,8 @@ async def _orchestrate(session_id: str) -> None:
     for phase in template_row.phases:
         phase_id = phase["phase_id"]
         phase_name = phase["name"]
-        log.info("orchestrator.phase.start session_id=%s phase_id=%s", session_id, phase_id)
+        turn_order = phase.get("turn_order", "FACILITATOR_LED")
+        log.info("orchestrator.phase.start session_id=%s phase_id=%s turn_order=%s", session_id, phase_id, turn_order)
 
         action_context: dict[str, Any] = {}
         outcome = ""
@@ -370,7 +371,17 @@ async def _orchestrate(session_id: str) -> None:
                             disc_cfg = {
                                 "allowed_actions": next_a.get("allowed_actions", []),
                                 "timeout_seconds": next_a.get("timeout_seconds", 60),
+                                "turn_order": turn_order,
                             }
+                            # Round-robin specific config (US-41)
+                            if turn_order == "ROUND_ROBIN":
+                                disc_cfg["turn_timeout_seconds"] = next_a.get(
+                                    "turn_timeout_seconds", 30
+                                )
+                                disc_cfg["max_rounds"] = next_a.get("max_rounds", 5)
+                                disc_cfg["synthesize_proposals"] = next_a.get(
+                                    "synthesize_proposals", True
+                                )
                         break
 
                 # US-36: Broadcast phase_started to HUMAN participants
@@ -422,25 +433,53 @@ async def _orchestrate(session_id: str) -> None:
                             disc_cfg = {
                                 "allowed_actions": next_a.get("allowed_actions", []),
                                 "timeout_seconds": next_a.get("timeout_seconds", 60),
+                                "turn_order": turn_order,
                             }
+                            # Round-robin specific config (US-41)
+                            if turn_order == "ROUND_ROBIN":
+                                disc_cfg["turn_timeout_seconds"] = next_a.get(
+                                    "turn_timeout_seconds", 30
+                                )
+                                disc_cfg["max_rounds"] = next_a.get("max_rounds", 5)
+                                disc_cfg["synthesize_proposals"] = next_a.get(
+                                    "synthesize_proposals", False
+                                )
                         break
 
                 # Enter discussion if configured
                 if disc_cfg.get("allowed_actions"):
-                    _, final_assignments, asgn_rounds = await _handle_discussion(
-                        session=session,
-                        slots=slots,
-                        context="assignment",
-                        allowed_actions=disc_cfg["allowed_actions"],
-                        timeout_seconds=disc_cfg.get("timeout_seconds", 60),
-                        backlog_items=backlog_items or [],
-                        selected_items=selected_items or [],
-                        assignments=assignments,
-                        phase_id=phase_id,
-                        phase_name=phase_name,
-                        phase_history=phase_history,
-                        human_messages=human_messages,
-                    )
+                    if turn_order == "ROUND_ROBIN":
+                        _, final_assignments, asgn_rounds = await _handle_round_robin_discussion(
+                            session=session,
+                            slots=slots,
+                            context="assignment",
+                            allowed_actions=disc_cfg["allowed_actions"],
+                            turn_timeout_seconds=disc_cfg.get("turn_timeout_seconds", 30),
+                            max_rounds=disc_cfg.get("max_rounds", 5),
+                            synthesize_proposals=disc_cfg.get("synthesize_proposals", False),
+                            backlog_items=backlog_items or [],
+                            selected_items=selected_items or [],
+                            assignments=assignments,
+                            phase_id=phase_id,
+                            phase_name=phase_name,
+                            phase_history=phase_history,
+                            human_messages=human_messages,
+                        )
+                    else:
+                        _, final_assignments, asgn_rounds = await _handle_discussion(
+                            session=session,
+                            slots=slots,
+                            context="assignment",
+                            allowed_actions=disc_cfg["allowed_actions"],
+                            timeout_seconds=disc_cfg.get("timeout_seconds", 60),
+                            backlog_items=backlog_items or [],
+                            selected_items=selected_items or [],
+                            assignments=assignments,
+                            phase_id=phase_id,
+                            phase_name=phase_name,
+                            phase_history=phase_history,
+                            human_messages=human_messages,
+                        )
                     assignments = final_assignments
                     assignment_rounds = asgn_rounds
                 outcome = f"{len(assignments)} items assigned, {assignment_rounds or 0} rounds"
@@ -1354,6 +1393,497 @@ async def _handle_discussion(
     return working_items, working_assignments, round_count
 
 
+# ── US-41: Round-Robin Discussion Handler ──────────────────────────────────────
+
+_ROLE_PRIORITY: dict[str, int] = {
+    "PRODUCT_OWNER": 0,
+    "ARCHITECT": 1,
+    "DEVELOPER": 2,
+    # HUMAN roles get priority 99 (last)
+}
+
+
+def _role_sort_key(slot: _SlotSnap) -> tuple[int, str]:
+    return (_ROLE_PRIORITY.get(slot.role, 99), slot.name)
+
+
+async def _request_turn(
+    session: _SessionSnap,
+    slot: _SlotSnap,
+    context: str,
+    allowed_actions: list[str],
+    working_items: list[str],
+    working_assignments: dict[str, str],
+    backlog_items: list[dict],
+    round_num: int,
+    ordered_slots: list[_SlotSnap],
+    round_messages: list[dict],
+    turn_timeout_seconds: int,
+    phase_id: str,
+    phase_name: str,
+    phase_history: list[dict],
+    human_messages: list[dict] | None = None,
+) -> dict[str, Any] | None:
+    """Send your_turn to a participant and wait for their response.
+
+    Returns the parsed turn response dict, or None on timeout/error.
+    """
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    payload: dict[str, Any] = {
+        "round": round_num,
+        "context": context,
+        "allowed_actions": allowed_actions,
+        "current_items": [
+            next((it for it in backlog_items if it["item_id"] == iid), {"item_id": iid})
+            for iid in working_items
+        ],
+        "assignments": working_assignments,
+        "discussion_so_far": round_messages,
+        "participants": [
+            {"name": s.name, "role": s.role, "done": False}
+            for s in ordered_slots
+        ],
+    }
+
+    # Publish your_turn to comm bus (for UI visibility)
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session.id,
+        timestamp=_now_iso(),
+        sender_id="platform",
+        sender_name="Platform",
+        receiver_id=slot.participant_id or slot.id,
+        receiver_name=slot.name,
+        task_type="your_turn",
+        message_kind="broadcast",
+        content=payload,
+    ))
+
+    # Send A2A task if slot has an endpoint (agents + joined humans)
+    if slot.endpoint:
+        ctx = _build_ctx(
+            session, ordered_slots, phase_id, phase_name, round_num + 1,
+            backlog_items, working_items, working_assignments,
+            phase_history, human_messages,
+        )
+        try:
+            result = await _a2a.send_task(
+                endpoint=slot.endpoint,
+                task_type="your_turn",
+                session_ctx=ctx,
+                payload=payload,
+                duration_limit_seconds=turn_timeout_seconds,
+            )
+            if result.ok and result.artifact:
+                artifact = result.artifact if isinstance(result.artifact, dict) else {}
+                # Ensure done field exists
+                if "done" not in artifact:
+                    artifact["done"] = False
+                return artifact
+        except Exception as exc:
+            log.warning(
+                "round_robin.turn_failed session_id=%s slot=%s exc=%s",
+                session.id, slot.id, exc,
+            )
+
+    return None  # timeout or no endpoint
+
+
+def _apply_turn_actions(
+    actions: list[dict],
+    context: str,
+    working_items: list[str],
+    backlog_items: list[dict],
+    working_assignments: dict[str, str],
+    slots: list[_SlotSnap],
+    sender_id: str,
+) -> bool:
+    """Apply structured actions from a turn response. Returns True if any change."""
+    changed = False
+    for action in actions:
+        action_type = action.get("type", "")
+        if context == "recommendation":
+            if action_type == "add_item":
+                item_data = action.get("item", {})
+                item_id = item_data.get("item_id", "")
+                if item_id and item_id not in working_items:
+                    exists = any(it["item_id"] == item_id for it in backlog_items)
+                    if not exists:
+                        try:
+                            validated = BacklogItem.model_validate(item_data)
+                            backlog_items.append(validated.model_dump())
+                        except ValidationError:
+                            continue
+                    if item_id not in working_items:
+                        working_items.append(item_id)
+                        changed = True
+            elif action_type == "remove_item":
+                item_id = action.get("item_id", "")
+                if item_id in working_items:
+                    working_items.remove(item_id)
+                    changed = True
+            elif action_type == "modify_item":
+                item_id = action.get("item_id", "")
+                updates = action.get("updates", {})
+                if item_id and updates:
+                    for item in backlog_items:
+                        if item["item_id"] == item_id:
+                            allowed = {"title", "description", "priority",
+                                       "story_points", "labels", "dependencies"}
+                            for k, v in updates.items():
+                                if k in allowed:
+                                    item[k] = v
+                            changed = True
+                            break
+        elif context == "assignment":
+            if action_type == "volunteer":
+                item_id = action.get("item_id", "")
+                if item_id and item_id in working_items and item_id not in working_assignments:
+                    working_assignments[item_id] = sender_id
+                    changed = True
+            elif action_type == "object":
+                item_id = action.get("item_id", "")
+                if item_id and item_id in working_assignments:
+                    del working_assignments[item_id]
+                    changed = True
+            elif action_type == "reassign":
+                item_id = action.get("item_id", "")
+                to_pid = action.get("to_participant_id", "")
+                valid_pids = {s.participant_id for s in slots if s.participant_id}
+                if item_id and to_pid and item_id in working_items and to_pid in valid_pids:
+                    working_assignments[item_id] = to_pid
+                    changed = True
+    return changed
+
+
+def _synthesize_from_round(
+    round_messages: list[dict],
+    backlog_items: list[dict],
+    working_items: list[str],
+) -> list[dict]:
+    """Extract new backlog item proposals from round messages.
+
+    Scans all add_item actions in this round and returns items
+    not already in the backlog.
+    """
+    new_items: list[dict] = []
+    existing_ids = {it["item_id"] for it in backlog_items}
+
+    for msg in round_messages:
+        for action in msg.get("actions", []):
+            if action.get("type") == "add_item":
+                item_data = action.get("item", {})
+                item_id = item_data.get("item_id", "")
+                if item_id and item_id not in existing_ids:
+                    try:
+                        validated = BacklogItem.model_validate(item_data)
+                        new_items.append(validated.model_dump())
+                        existing_ids.add(item_id)
+                    except ValidationError:
+                        continue
+
+    if new_items:
+        log.info(
+            "round_robin.synthesized count=%d ids=%s",
+            len(new_items), [it["item_id"] for it in new_items],
+        )
+    return new_items
+
+
+async def _broadcast_round_summary(
+    session: _SessionSnap,
+    context: str,
+    round_num: int,
+    round_messages: list[dict],
+    working_items: list[str],
+    working_assignments: dict[str, str],
+    backlog_items: list[dict],
+    consensus_state: dict[str, bool],
+    new_items_proposed: bool,
+) -> None:
+    """Publish round_summary event to the comm bus."""
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+
+    all_done = all(consensus_state.values()) if consensus_state else False
+
+    payload: dict[str, Any] = {
+        "round": round_num,
+        "context": context,
+        "messages": round_messages,
+        "items": [
+            next((it for it in backlog_items if it["item_id"] == iid), {"item_id": iid})
+            for iid in working_items
+        ],
+        "assignments": working_assignments,
+        "consensus": {
+            "all_done": all_done,
+            "state": consensus_state,
+        },
+        "new_items_proposed": new_items_proposed,
+    }
+
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session.id,
+        timestamp=_now_iso(),
+        sender_id="platform",
+        sender_name="Platform",
+        receiver_id=None,
+        receiver_name=None,
+        task_type="round_summary",
+        message_kind="broadcast",
+        content=payload,
+    ))
+
+
+async def _handle_round_robin_discussion(
+    session: _SessionSnap,
+    slots: list[_SlotSnap],
+    context: str,
+    allowed_actions: list[str],
+    turn_timeout_seconds: int,
+    max_rounds: int,
+    synthesize_proposals: bool,
+    backlog_items: list[dict],
+    selected_items: list[str],
+    assignments: dict[str, str],
+    phase_id: str,
+    phase_name: str,
+    phase_history: list[dict],
+    human_messages: list[dict] | None = None,
+) -> tuple[list[str], dict[str, str], int]:
+    """Round-robin discussion with per-agent stop conditions (US-41).
+
+    Each participant gets one turn per round, in role-priority order.
+    Platform sends your_turn, collects responses, checks for consensus
+    (all done=True), and optionally synthesizes new backlog proposals
+    after each round.
+
+    Consensus triggers:
+      - ALL participants return done=True → phase ends
+      - Reaching max_rounds → forced consensus
+
+    Returns (final_selected_items, final_assignments, round_count).
+    """
+    from app.a2a.models import CommEvent
+    from app.comm_bus import publish_comm_event
+    from app.platform_aggregator import (
+        AggregationResult,
+        RoundRecord,
+        aggregate,
+        detect_converged,
+        parse_agent_mutation_sets,
+    )
+    from app.recommender import recommend
+
+    # Working copies
+    working_items: list[str] = list(selected_items)
+    working_assignments: dict[str, str] = dict(assignments)
+
+    # Order participants by role priority, then name
+    ordered_slots = sorted(
+        [s for s in slots if s.status == "joined"],
+        key=_role_sort_key,
+    )
+
+    if not ordered_slots:
+        log.warning("round_robin.no_participants session_id=%s", session.id)
+        return working_items, working_assignments, 0
+
+    # Track consensus per slot
+    consensus_state: dict[str, bool] = {s.id: False for s in ordered_slots}
+    round_count = 0
+    total_cap = session.sprint_capacity or sum(
+        int((it.get("story_points") or 1)) for it in backlog_items
+    )
+
+    # CONVERGED tracking across rounds (t_71f69cb1)
+    round_history: list[RoundRecord] = []
+
+    # Broadcast initial state
+    await publish_comm_event(CommEvent(
+        comm_id=str(uuid4()),
+        session_id=session.id,
+        timestamp=_now_iso(),
+        sender_id="platform",
+        sender_name="Platform",
+        receiver_id=None,
+        receiver_name=None,
+        task_type="round_robin_started",
+        message_kind="broadcast",
+        content={
+            "context": context,
+            "max_rounds": max_rounds,
+            "turn_order": [s.name for s in ordered_slots],
+        },
+    ))
+
+    while round_count < max_rounds:
+        round_messages: list[dict] = []
+
+        # ── Each participant takes their turn ──
+        for slot in ordered_slots:
+            # Skip if already done from previous rounds
+            if consensus_state.get(slot.id, False):
+                round_messages.append({
+                    "slot_id": slot.id,
+                    "name": slot.name,
+                    "role": slot.role,
+                    "message": "",
+                    "actions": [],
+                    "done": True,
+                })
+                continue
+
+            turn_response = await _request_turn(
+                session, slot, context, allowed_actions,
+                working_items, working_assignments, backlog_items,
+                round_count, ordered_slots, round_messages,
+                turn_timeout_seconds, phase_id, phase_name,
+                phase_history, human_messages,
+            )
+
+            if turn_response is None:
+                # Timeout → auto-done, no contribution
+                consensus_state[slot.id] = True
+                round_messages.append({
+                    "slot_id": slot.id,
+                    "name": slot.name,
+                    "role": slot.role,
+                    "message": "",
+                    "actions": [],
+                    "done": True,
+                })
+                continue
+
+            # Apply structured actions from the turn
+            _apply_turn_actions(
+                turn_response.get("actions", []),
+                context, working_items, backlog_items,
+                working_assignments, slots,
+                slot.participant_id or slot.id,
+            )
+
+            round_messages.append({
+                "slot_id": slot.id,
+                "name": slot.name,
+                "role": slot.role,
+                "message": turn_response.get("message", ""),
+                "actions": turn_response.get("actions", []),
+                "done": turn_response.get("done", False),
+            })
+            consensus_state[slot.id] = turn_response.get("done", False)
+
+        round_count += 1
+
+        # ── Platform aggregation after round (t_71f69cb1) ──
+        new_items_proposed = False
+        aggregation_result: AggregationResult | None = None
+
+        if synthesize_proposals:
+            # ── Try structured aggregation first ──
+            agent_sets = parse_agent_mutation_sets(round_messages)
+            has_structured = any(
+                ams.mutations for ams in agent_sets.values()
+            )
+
+            if has_structured:
+                # Structured path: use platform aggregator for
+                # conflict-resolved reconcilement + re-ranking
+                aggregation_result = aggregate(
+                    agent_mutations=agent_sets,
+                    current_items=working_items,
+                    backlog_items=backlog_items,
+                    capacity=total_cap,
+                    sprint_goal=session.sprint_goal,
+                    recommend_fn=recommend,
+                )
+                working_items = aggregation_result.final_items
+                new_items_proposed = (
+                    aggregation_result.applied_adds > 0
+                    or aggregation_result.applied_removes > 0
+                    or aggregation_result.applied_modifies > 0
+                )
+                log.info(
+                    "round_robin.aggregated session_id=%s round=%d "
+                    "adds=%d removes=%d modifies=%d discarded=%d converged=%s",
+                    session.id, round_count,
+                    aggregation_result.applied_adds,
+                    aggregation_result.applied_removes,
+                    aggregation_result.applied_modifies,
+                    len(aggregation_result.discarded_mutations),
+                    aggregation_result.converged,
+                )
+            else:
+                # Fallback: no structured mutations → legacy synthesis
+                new_items = _synthesize_from_round(
+                    round_messages, backlog_items, working_items,
+                )
+                if new_items:
+                    new_items_proposed = True
+                    re_ranked = recommend(
+                        backlog_items=backlog_items,
+                        sprint_goal=session.sprint_goal,
+                        total_capacity=total_cap,
+                    )
+                    working_items = [it["item_id"] for it in re_ranked]
+
+        # ── CONVERGED detection (t_71f69cb1) ──
+        all_done_this_round = all(consensus_state.values())
+        mutations_this_round = (
+            aggregation_result.applied_adds
+            + aggregation_result.applied_removes
+            + aggregation_result.applied_modifies
+            if aggregation_result else 0
+        )
+        round_history.append(RoundRecord(
+            round_num=round_count,
+            mutations_count=mutations_this_round,
+            all_done=all_done_this_round,
+            converged=aggregation_result.converged if aggregation_result else all_done_this_round,
+        ))
+
+        # Broadcast round summary
+        await _broadcast_round_summary(
+            session, context, round_count, round_messages,
+            working_items, working_assignments, backlog_items,
+            consensus_state, new_items_proposed,
+        )
+
+        # ── Consensus / CONVERGED check ──
+        # 1. Single-round convergence: all done + no mutations (aggregator path)
+        if aggregation_result and aggregation_result.converged:
+            log.info(
+                "round_robin.converged session_id=%s context=%s round=%d",
+                session.id, context, round_count,
+            )
+            break
+        # 2. Multi-round CONVERGED: 2 consecutive rounds with no mutations + all done
+        if detect_converged(round_history, threshold=2):
+            log.info(
+                "round_robin.converged_multi_round session_id=%s context=%s "
+                "round=%d threshold=2",
+                session.id, context, round_count,
+            )
+            break
+        # 3. Original consensus: all done (handles no-mutations path)
+        if all(consensus_state.values()):
+            log.info(
+                "round_robin.consensus session_id=%s context=%s round=%d",
+                session.id, context, round_count,
+            )
+            break
+
+    log.info(
+        "round_robin.complete session_id=%s context=%s rounds=%d",
+        session.id, context, round_count,
+    )
+    return working_items, working_assignments, round_count
+
+
 # ── US-33: Recommend Handler ───────────────────────────────────────────────────
 
 
@@ -1401,20 +1931,38 @@ async def _handle_recommend(
     # Enter discussion if configured
     disc_cfg = discussion_config or {}
     if disc_cfg.get("allowed_actions"):
-        final_items, _, rounds = await _handle_discussion(
-            session=session,
-            slots=slots,
-            context="recommendation",
-            allowed_actions=disc_cfg["allowed_actions"],
-            timeout_seconds=disc_cfg.get("timeout_seconds", 60),
-            backlog_items=backlog_items,
-            selected_items=rec_item_ids,
-            assignments={},
-            phase_id=phase_id,
-            phase_name=phase_name,
-            phase_history=phase_history,
-            human_messages=human_messages,
-        )
+        if disc_cfg.get("turn_order") == "ROUND_ROBIN":
+            final_items, _, rounds = await _handle_round_robin_discussion(
+                session=session,
+                slots=slots,
+                context="recommendation",
+                allowed_actions=disc_cfg["allowed_actions"],
+                turn_timeout_seconds=disc_cfg.get("turn_timeout_seconds", 30),
+                max_rounds=disc_cfg.get("max_rounds", 5),
+                synthesize_proposals=disc_cfg.get("synthesize_proposals", True),
+                backlog_items=backlog_items,
+                selected_items=rec_item_ids,
+                assignments={},
+                phase_id=phase_id,
+                phase_name=phase_name,
+                phase_history=phase_history,
+                human_messages=human_messages,
+            )
+        else:
+            final_items, _, rounds = await _handle_discussion(
+                session=session,
+                slots=slots,
+                context="recommendation",
+                allowed_actions=disc_cfg["allowed_actions"],
+                timeout_seconds=disc_cfg.get("timeout_seconds", 60),
+                backlog_items=backlog_items,
+                selected_items=rec_item_ids,
+                assignments={},
+                phase_id=phase_id,
+                phase_name=phase_name,
+                phase_history=phase_history,
+                human_messages=human_messages,
+            )
         return final_items, rounds
 
     return rec_item_ids, 0

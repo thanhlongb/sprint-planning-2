@@ -189,6 +189,9 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
     if task.task_type == "assignment_proposal":
         return _handle_assignment_proposal(task)
 
+    if task.task_type == "your_turn":
+        return _handle_your_turn(task)
+
     raise HTTPException(400, f"Unsupported task type: {task.task_type!r}")
 
 
@@ -796,4 +799,20 @@ def _handle_assignment_proposal(task: Task) -> dict:
             "objects": objects,
             "reassignments": reassignments,
         },
+    }
+
+
+# ── Your-turn handler (US-41: Round-Robin) ────────────────────────────────────
+
+
+def _handle_your_turn(task: Task) -> dict:
+    """Stub: LLM-based round-robin reasoning not yet implemented.
+
+    Always returns done=True — the LLM dev agent treats round-robin turns
+    as informational and defers to the reference dev agent for proposals.
+    """
+    return {
+        "task_id": task.task_id,
+        "status": "completed",
+        "artifact": {"message": "", "actions": [], "done": True},
     }

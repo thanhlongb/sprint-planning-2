@@ -1049,6 +1049,9 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
     if task.task_type == "accept_plan":
         return _handle_accept_plan(task)
 
+    if task.task_type == "your_turn":
+        return _handle_your_turn(task)
+
     raise HTTPException(400, f"Unsupported task type: {task.task_type}")
 
 
@@ -1112,6 +1115,72 @@ def _handle_accept_plan(task: Task) -> dict:
         "task_id": task.task_id,
         "status": "completed",
         "artifact": {"accepted": non_empty},
+    }
+
+
+# ── Your-turn handler (US-41: Round-Robin) ────────────────────────────────────
+
+
+def _handle_your_turn(task: Task) -> dict:
+    """Respond to round-robin your_turn request.
+
+    Strategy:
+      - Round 0: propose new auth/security items if sprint_goal mentions
+        relevant keywords; otherwise say done.
+      - Round 1+: always done (reference agent doesn't iterate).
+    """
+    round_num = task.payload.get("round", 0)
+    context = task.payload.get("context", "")
+    sprint_goal = task.session_ctx.get("sprint_goal", "").lower()
+
+    if round_num > 0:
+        return {
+            "task_id": task.task_id,
+            "status": "completed",
+            "artifact": {"message": "", "actions": [], "done": True},
+        }
+
+    actions: list[dict] = []
+
+    if context == "recommendation":
+        # Propose additional items based on sprint goal keywords
+        if "security" in sprint_goal or "auth" in sprint_goal:
+            actions.append({
+                "type": "add_item",
+                "item": {
+                    "item_id": "PO-PROP-01",
+                    "title": "Security audit of authentication flow",
+                    "description": "Conduct a comprehensive security review of all auth endpoints including OAuth, JWT, and session management.",
+                    "priority": "HIGH",
+                    "story_points": 5,
+                    "labels": ["security", "auth"],
+                    "dependencies": [],
+                },
+            })
+        if "profile" in sprint_goal or "user" in sprint_goal:
+            actions.append({
+                "type": "add_item",
+                "item": {
+                    "item_id": "PO-PROP-02",
+                    "title": "User profile data export (GDPR)",
+                    "description": "Allow users to export all their personal data in machine-readable format for GDPR compliance.",
+                    "priority": "MEDIUM",
+                    "story_points": 3,
+                    "labels": ["compliance", "api"],
+                    "dependencies": [],
+                },
+            })
+
+    done = len(actions) == 0
+
+    return {
+        "task_id": task.task_id,
+        "status": "completed",
+        "artifact": {
+            "message": "Proposing relevant items based on sprint goal." if actions else "Nothing to add.",
+            "actions": actions,
+            "done": done,
+        },
     }
 
 
