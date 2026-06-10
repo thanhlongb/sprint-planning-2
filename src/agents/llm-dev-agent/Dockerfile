@@ -7,6 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 COPY pyproject.toml ./
+COPY llm_agent ./llm_agent
 RUN pip install --upgrade pip && pip install .
 
 COPY app ./app

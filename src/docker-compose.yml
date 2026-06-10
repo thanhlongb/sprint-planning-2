@@ -96,6 +96,9 @@ services:
       - "8011:8011"
     depends_on:
       - platform
+    volumes:
+      - ./agents/llm-po-agent/app:/app/app
+      - ./agents/llm_agent:/app/llm_agent
 
   llm-dev-agent:
     build:
@@ -116,6 +119,9 @@ services:
       - "8012:8012"
     depends_on:
       - platform
+    volumes:
+      - ./agents/llm-dev-agent/app:/app/app
+      - ./agents/llm_agent:/app/llm_agent
 
   ui:
     build:

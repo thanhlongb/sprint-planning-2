@@ -19,10 +19,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from typing import Any
+import os
 
 import httpx
+
+from llm_agent.llm_client import complete_async
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -288,7 +290,7 @@ async def _handle_human_message(task: Task) -> dict:
 
     reply = f"Thanks {sender_name}, noted."
     try:
-        reply = await asyncio.wait_for(_call_llm(system_prompt, user_prompt), timeout=8.0)
+        reply = await asyncio.wait_for(complete_async(user_prompt, system_prompt=system_prompt), timeout=8.0)
     except Exception as exc:
         log.warning("human_message.llm_failed exc=%s", exc)
 
@@ -336,7 +338,7 @@ async def _handle_direct_message(task: Task) -> dict:
 
     reply = f"Thanks {sender_name}, I'll keep that in mind."
     try:
-        reply = await asyncio.wait_for(_call_llm(system_prompt, user_prompt), timeout=9.0)
+        reply = await asyncio.wait_for(complete_async(user_prompt, system_prompt=system_prompt), timeout=9.0)
     except Exception as exc:
         log.warning("direct_message.llm_failed exc=%s", exc)
 
@@ -422,7 +424,7 @@ async def _run_vote(task: Task, queue: asyncio.Queue[dict[str, Any]]) -> None:
 
     try:
         raw_response = await asyncio.wait_for(
-            _call_llm(system_prompt, user_prompt),
+            complete_async(user_prompt, system_prompt=system_prompt),
             timeout=DEFAULT_LLM_TIMEOUT,
         )
     except asyncio.TimeoutError:
@@ -568,7 +570,7 @@ async def _run_assign_opportunity(task: Task, queue: asyncio.Queue[dict[str, Any
 
     try:
         raw_response = await asyncio.wait_for(
-            _call_llm(system_prompt, user_prompt),
+            complete_async(user_prompt, system_prompt=system_prompt),
             timeout=ASSIGNMENT_LLM_TIMEOUT,
         )
         parsed = _parse_volunteer(raw_response)
@@ -611,68 +613,6 @@ async def _run_assign_opportunity(task: Task, queue: asyncio.Queue[dict[str, Any
         "status": "completed",
         "artifact": {"volunteer": volunteer, "reason": reason},
     })
-
-
-# ── LLM call dispatcher ───────────────────────────────────────────────────────
-
-
-async def _call_llm(system_prompt: str, user_prompt: str) -> str:
-    if LLM_PROVIDER == "anthropic":
-        return await _call_anthropic(system_prompt, user_prompt)
-    return await _call_openai(system_prompt, user_prompt)
-
-
-async def _call_openai(system_prompt: str, user_prompt: str) -> str:
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is not set")
-
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 512,
-    }
-    async with httpx.AsyncClient(timeout=None) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
-
-
-async def _call_anthropic(system_prompt: str, user_prompt: str) -> str:
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
-
-    payload = {
-        "model": ANTHROPIC_MODEL,
-        "max_tokens": 512,
-        "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-        "messages": [{"role": "user", "content": user_prompt}],
-    }
-    async with httpx.AsyncClient(timeout=None) as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            json=payload,
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": "prompt-caching-2024-07-31",
-                "Content-Type": "application/json",
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["content"][0]["text"]
 
 
 # ── Response parsers (AC4) ────────────────────────────────────────────────────
@@ -972,7 +912,7 @@ async def _handle_your_turn(task: Task) -> dict:
     )
 
     try:
-        raw_response = await _call_llm(system_prompt, user_prompt)
+        raw_response = await complete_async(user_prompt, system_prompt=system_prompt)
         parsed = _parse_your_turn_response(raw_response, allowed_actions)
     except Exception as exc:
         log.warning("your_turn.llm_failed session_id=%s exc=%s", session_id, exc)

@@ -27,6 +27,8 @@ import re
 from typing import Any
 
 import httpx
+
+from llm_agent.llm_client import complete_async
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -381,7 +383,7 @@ async def _handle_human_message(task: Task) -> dict:
 
     reply = f"Thanks {sender_name}, noted."
     try:
-        reply = await asyncio.wait_for(_llm_call(system_prompt, user_prompt), timeout=8.0)
+        reply = await asyncio.wait_for(complete_async(user_prompt, system_prompt=system_prompt), timeout=8.0)
     except Exception as exc:
         log.warning("human_message.llm_failed exc=%s", exc)
 
@@ -427,7 +429,7 @@ async def _handle_direct_message(task: Task) -> dict:
 
     reply = f"Thanks {sender_name}, good point."
     try:
-        reply = await asyncio.wait_for(_llm_call(system_prompt, user_prompt), timeout=9.0)
+        reply = await asyncio.wait_for(complete_async(user_prompt, system_prompt=system_prompt), timeout=9.0)
     except Exception as exc:
         log.warning("direct_message.llm_failed exc=%s", exc)
 
@@ -565,7 +567,7 @@ async def _handle_your_turn(task: Task) -> dict:
     )
 
     try:
-        raw_response = await _llm_call(system_prompt, user_prompt)
+        raw_response = await complete_async(user_prompt, system_prompt=system_prompt)
         parsed = _parse_your_turn_response(raw_response, allowed_actions)
     except Exception as exc:
         log.warning("your_turn.llm_failed session_id=%s exc=%s", session_id, exc)
@@ -687,7 +689,7 @@ async def _llm_generate_backlog(sprint_goal: str, session_id: str, task_id: str)
         "llm.backlog.call provider=%s session_id=%s task_id=%s",
         LLM_PROVIDER, session_id, task_id,
     )
-    return await _llm_call(_BACKLOG_SYSTEM_PROMPT, user_message)
+    return await complete_async(user_message, system_prompt=_BACKLOG_SYSTEM_PROMPT)
 
 
 async def _llm_vote(
@@ -725,70 +727,7 @@ async def _llm_vote(
         "llm.vote.call provider=%s session_id=%s task_id=%s items=%d",
         LLM_PROVIDER, session_id, task_id, len(item_ids),
     )
-    return await _llm_call(_VOTE_SYSTEM_PROMPT, user_message)
-
-
-async def _llm_call(system_prompt: str, user_message: str) -> str:
-    if LLM_PROVIDER == "anthropic":
-        return await _call_anthropic(system_prompt, user_message)
-    return await _call_openai(system_prompt, user_message)
-
-
-async def _call_openai(system_prompt: str, user_message: str) -> str:
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is not set")
-
-    needs_array = "JSON array" in user_message
-    payload: dict[str, Any] = {
-        "model": OPENAI_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        "temperature": 0.7,
-        "max_tokens": 4096,
-    }
-    if not needs_array:
-        payload["response_format"] = {"type": "json_object"}
-
-    async with httpx.AsyncClient(timeout=LLM_TIMEOUT_SECONDS) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-
-
-async def _call_anthropic(system_prompt: str, user_message: str) -> str:
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
-
-    payload = {
-        "model": ANTHROPIC_MODEL,
-        "max_tokens": 4096,
-        "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-        "messages": [{"role": "user", "content": user_message}],
-    }
-    async with httpx.AsyncClient(timeout=LLM_TIMEOUT_SECONDS) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": "prompt-caching-2024-07-31",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["content"][0]["text"]
+    return await complete_async(user_message, system_prompt=_VOTE_SYSTEM_PROMPT)
 
 
 # ── Output parsers and validators ─────────────────────────────────────────────
