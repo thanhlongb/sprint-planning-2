@@ -183,7 +183,7 @@ async def receive_task(task: Task, request: Request, response: Response) -> dict
         return await _handle_direct_message(task)
 
     if task.task_type == "your_turn":
-        return _handle_your_turn(task)
+        return await _handle_your_turn(task)
 
     raise HTTPException(400, f"Unsupported task type: {task.task_type!r}")
 
@@ -440,18 +440,193 @@ async def _handle_direct_message(task: Task) -> dict:
 
 # ── Your-turn handler (US-41: Round-Robin) ────────────────────────────────────
 
+_YOUR_TURN_PO_SYSTEM_PROMPT = """\
+You are an experienced Product Owner participating in an Agile sprint planning round-robin discussion.
+Your job is to reason about the current sprint backlog and propose concrete actions to improve it.
 
-def _handle_your_turn(task: Task) -> dict:
-    """Stub: LLM-based round-robin reasoning not yet implemented.
+You are in the {context} phase.
+- If context is "recommendation": focus on what items should be in the sprint — add missing items
+  that advance the sprint goal, remove items that don't align, or modify existing items (adjust
+  story points, priority, or scope).
+- If context is "assignment": focus on who should work on what — object to mismatched assignments
+  where an item is assigned to someone without the right expertise.
 
-    Always returns done=True — the LLM PO agent treats round-robin turns
-    as informational and defers to the reference PO agent for proposals.
+Allowed action types: {allowed_actions}
+
+Return ONLY a valid JSON object with these fields:
+  - "message": a brief human-readable explanation of your reasoning (1-2 sentences, in character
+    as Product Owner)
+  - "actions": a list of action objects. Each action has:
+      - "type": one of the allowed action types listed above
+      - "item_id": the item ID (string)
+      - "reason": a natural-language justification (1 sentence explaining why)
+      For "add_item" actions, also include "item" with:
+        - "item_id": unique ID string (e.g. "LLM-PO-ADD-1")
+        - "title": concise title
+        - "description": 1-2 sentence description
+        - "priority": "HIGH", "MEDIUM", or "LOW"
+        - "story_points": integer 1-13 (use Fibonacci: 1,2,3,5,8,13)
+        - "labels": list of strings
+        - "dependencies": list of item_id strings (or empty list)
+      For "modify_item" actions, also include:
+        - "field": the field name to modify (e.g. "priority", "story_points", "title")
+        - "new_value": the new value
+  - "done": true if you have no more proposals, false if you might have more ideas in a later round
+
+Do NOT output markdown fences or commentary — only valid JSON. Do not include null values.
+"""
+
+
+async def _handle_your_turn(task: Task) -> dict:
+    """LLM-driven round-robin reasoning for Product Owner agent (US-41).
+
+    Passes sprint context, current items, and agent persona to the LLM.
+    Agent proposes add/remove/modify/volunteer/object actions with NL justifications.
+    Returns {actions, message, done} in the standard format.
     """
+    round_num = task.payload.get("round", 0)
+    context = task.payload.get("context", "recommendation")
+    allowed_actions: list[str] = task.payload.get(
+        "allowed_actions",
+        ["add_item", "remove_item", "modify_item", "volunteer", "object"],
+    )
+    current_items: list[dict] = task.payload.get("current_items", [])
+    assignments: dict[str, str] = task.payload.get("assignments", {})
+    discussion_so_far: list[dict] = task.payload.get("discussion_so_far", [])
+    participants: list[dict] = task.payload.get("participants", [])
+
+    sprint_goal = task.session_ctx.get("sprint_goal", "")
+    backlog_items: list[dict] = task.session_ctx.get("backlog_items") or []
+    human_messages: list[dict] = task.session_ctx.get("human_messages") or []
+
+    session_id = task.session_ctx.get("session_id", "<no-session>")
+    log.info(
+        "your_turn.received session_id=%s round=%d context=%s items=%d",
+        session_id, round_num, context, len(current_items),
+    )
+
+    # Cap LLM calls at round 3 to prevent runaway loops.
+    if round_num > 3:
+        log.info("your_turn.round_cap session_id=%s round=%d", session_id, round_num)
+        return {
+            "task_id": task.task_id,
+            "status": "completed",
+            "artifact": {
+                "message": "I've said my piece on this. Let's converge.",
+                "actions": [],
+                "done": True,
+            },
+        }
+
+    # ── Build rich context for the LLM ─────────────────────────────────────
+    items_summary = "\n".join(
+        f"  - {it.get('item_id', '?')}: {it.get('title', '?')} "
+        f"[priority={it.get('priority', '?')}, sp={it.get('story_points', '?')}, "
+        f"labels={it.get('labels', [])}]"
+        for it in current_items
+    ) or "(no items)"
+
+    assignments_summary = "\n".join(
+        f"  - {iid} → {pid or 'unassigned'}"
+        for iid, pid in assignments.items()
+    ) or "(no assignments)"
+
+    participant_summary = ", ".join(
+        f"{p.get('name', '?')} ({p.get('role', '?')})"
+        for p in participants
+    )
+
+    discussion_text = "\n".join(
+        f"  [{d.get('sender_name', '?')}]: {d.get('content', str(d))}"
+        for d in discussion_so_far[-10:]
+    ) or "(no discussion yet)"
+
+    human_notes = "\n".join(
+        f"  - {m.get('sender_name', 'participant')}: {m.get('content', '')}"
+        for m in human_messages[-5:]
+    ) or "(none)"
+
+    system_prompt = _YOUR_TURN_PO_SYSTEM_PROMPT.format(
+        context=context,
+        allowed_actions=", ".join(allowed_actions),
+    )
+
+    user_prompt = (
+        f"Round {round_num} of the {context} discussion.\n\n"
+        f"Sprint goal: {sprint_goal}\n\n"
+        f"Participants: {participant_summary}\n\n"
+        f"Current working items:\n{items_summary}\n\n"
+        f"Current assignments:\n{assignments_summary}\n\n"
+        f"Discussion so far this round:\n{discussion_text}\n\n"
+        f"Human participant messages:\n{human_notes}\n\n"
+        f"As Product Owner, what actions do you propose? "
+        f"Allowed actions: {', '.join(allowed_actions)}.\n"
+        "Return ONLY valid JSON with message, actions, and done fields."
+    )
+
+    try:
+        raw_response = await _llm_call(system_prompt, user_prompt)
+        parsed = _parse_your_turn_response(raw_response, allowed_actions)
+    except Exception as exc:
+        log.warning("your_turn.llm_failed session_id=%s exc=%s", session_id, exc)
+        return {
+            "task_id": task.task_id,
+            "status": "completed",
+            "artifact": {
+                "message": f"Thinking... (LLM error, skipping turn)",
+                "actions": [],
+                "done": True,
+            },
+        }
+
+    actions = parsed.get("actions", [])
+    message = parsed.get("message", "")
+    done = parsed.get("done", len(actions) == 0)
+
+    log.info(
+        "your_turn.complete session_id=%s actions=%d done=%s",
+        session_id, len(actions), done,
+    )
+
     return {
         "task_id": task.task_id,
         "status": "completed",
-        "artifact": {"message": "", "actions": [], "done": True},
+        "artifact": {"message": message, "actions": actions, "done": done},
     }
+
+
+def _parse_your_turn_response(raw: str, allowed_actions: list[str]) -> dict[str, Any]:
+    """Parse LLM output into {message, actions, done} dict with validation."""
+    allowed = set(allowed_actions)
+    try:
+        extracted = _extract_json(raw)
+        parsed = json.loads(extracted)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
+
+        actions = parsed.get("actions", [])
+        if not isinstance(actions, list):
+            actions = []
+
+        # Filter to allowed action types only
+        filtered: list[dict] = []
+        for a in actions:
+            if not isinstance(a, dict):
+                continue
+            a_type = a.get("type", "")
+            if a_type in allowed:
+                filtered.append(a)
+            else:
+                log.warning("your_turn.skipped_action type=%r not in allowed=%s", a_type, allowed)
+
+        return {
+            "message": str(parsed.get("message", "")),
+            "actions": filtered,
+            "done": bool(parsed.get("done", len(filtered) == 0)),
+        }
+    except Exception as exc:
+        log.warning("your_turn.parse_failed exc=%s raw=%r", exc, raw[:200])
+        return {"message": "", "actions": [], "done": True}
 
 
 # ── confirm (sync) ────────────────────────────────────────────────────────────
